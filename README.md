@@ -1,675 +1,351 @@
 # RLSPL Studio
 
-Requires Python 3.10 or newer.
+**RLSPL Studio** is a standalone software platform for configuring, generating, and experimentally studying **Reinforcement Learning (RL) products through Software Product Line (SPL) principles**.
 
-This repository is a clean-room, extension-free implementation of RLSPL Studio.
-It contains the domain models, component registry, capability resolver, local
-browser configuration editor, selective product generator, and the first
-standalone reinforcement-learning runtime. It has no dependency on Mobioos Forge.
+The platform makes RL variability explicit. Instead of treating an RL experiment as a collection of loosely connected scripts and parameters, RLSPL represents major design choices—such as the environment, learning algorithm, optimizer, action-selection strategy, hyperparameters, and execution settings—as configurable features subject to compatibility constraints.
 
-## Current milestone — v0.15.3
+---
 
-- Versioned user and resolved configuration models.
-- Typed fixed and tunable parameter bindings.
-- Executable optional HPO products with deterministic Random Search and
-  Tree-structured Parzen Estimator (TPE) samplers built into generated source.
-- Multi-seed trial scoring with mean, median, or interquartile-mean aggregation,
-  separate sampler and learning seeds, optional wall-clock stopping, and a
-  non-blocking workload advisory.
-- Best-configuration materialization followed by one final fit and independent
-  final-policy evaluation; search trials are never presented as final evidence.
-- Capability descriptors for environments, algorithms, action behaviors, and
-  optimizers/update rules.
-- Initial catalog for Q-Learning, DQN, DDPG, and SAC.
-- Built-in environment catalog for discrete MountainCar, CartPole, Acrobot,
-  discrete LunarLander, continuous MountainCar, Pendulum, continuous
-  LunarLander, and BipedalWalker.
-- Structural, capability, parameter, search, and evaluation validation.
-- Blocking errors separated from non-blocking advisories.
-- Immutable run metadata model, separate from the feature branches.
-- Standard-library test suite and JSON validation CLI.
-- Local browser configuration editor backed by resolver and generator APIs.
-- Configure selectors expose the complete unique catalog—eight environments,
-  four algorithms, eight action behaviors, and four optimizers. Potentially
-  incompatible choices stay visible so the resolver can explain their
-  cross-tree constraint rather than hiding variability.
-- Configure component pickers use bounded, keyboard-navigable, independently
-  scrollable menus, so a growing plug-in catalog cannot be clipped by the page.
-- Explicit product plans and selective source generation.
-- Executable Q-Learning, DQN, DDPG, and SAC products.
-- DQN composition with online/target networks, replay memory, hard target
-  synchronization, a selectable action behavior, and a selectable gradient
-  optimizer.
-- DDPG composition with bounded actors, critic and target networks, replay
-  memory, soft target updates, five compatible action behaviors, and three
-  compatible gradient optimizers.
-- SAC composition with a squashed-Gaussian policy, twin critics and target
-  critics, replay memory, soft target updates, optional automatic entropy
-  tuning, four compatible action behaviors, and three optimizers.
-- Eight public action-selection components: greedy, random-action mixture,
-  Boltzmann sampling, deterministic actor, Gaussian action noise,
-  Ornstein–Uhlenbeck noise, parameter-space noise, and entropy-policy sampling.
-- Four public update components: direct tabular update, Adam, RMSprop, and SGD.
-- Interface-derived behavior and optimizer compatibility. Algorithms expose
-  policy and update interfaces; components declare requirements instead of
-  using algorithm-specific allowlists.
-- Behavior- and optimizer-owned parameter activation, validation, defaults,
-  provenance, configuration hashing, and generated runtime assets.
-- Executable adapters for all eight built-in Gymnasium environments.
-- Success-aware evaluation and monitoring: every reward result is paired with
-  the selected environment's exact native success predicate when one exists;
-  return-only tasks such as Pendulum explicitly omit binary success metrics
-  instead of manufacturing a threshold.
-- Evaluation metrics, CSV/JSON exports, plots, agent checkpoints, and immutable
-  run metadata.
-- Operational checkpoint policies: disabled, best-performing policy, or
-  periodic episode snapshots.
-- Component-owned runtime assets: algorithms and environments plug together
-  through capability contracts without a hardcoded pairing whitelist.
-- Non-blocking resource estimation for dense Q-tables.
-- Root-level generated-product launcher with dependency diagnostics.
-- Persistent copyable installation and run commands after browser generation.
-- Versioned JSON plug-in manifests for environments, algorithms, action
-  behaviors, and optimizers.
-- Recursive local plug-in discovery with isolated `PLG-*` diagnostics.
-- Plug-in-owned runtime templates and automatic capability-based composition.
-- Catalog inspection through `rlspl components`.
-- First-class finite exploration studies assembled from explicit environment,
-  algorithm, behavior, optimizer, structural, and parametric selections, with independent
-  replication seeds and no Configure-workspace base.
-- Independent, editable training-replication and final-evaluation seed sets,
-  with live seed counts and stale-preview invalidation in Explore.
-- Live Explore cards reveal the shared and algorithm-owned catalog defaults for
-  every selected algorithm; selecting or clearing an algorithm updates the
-  visible hyperparameter values immediately.
-- Deterministic Cartesian expansion followed by candidate-level constraint
-  resolution.
-- Owner-aware conditional axes, so algorithm-specific parameters vary only
-  when their algorithm is active.
-- Preservation of valid configurations, excluded candidates and their exact
-  constraint violations, and semantically equivalent candidate deduplication.
-- Exact candidate counts, preview-aware run counts, and non-blocking
-  truncation advisories for very large spaces.
-- Immutable, content-addressed study manifests containing configuration
-  lineage and resolved variants.
-- Resumable study execution with `rlspl run-study`, bounded parallelism, and
-  atomic run-state persistence.
-- Monitor-visible implicit study workspaces: omitting `--workspace` now writes
-  to `<catalog-root>/study-runs/<manifest-name>`, including the correct
-  `generated/study-runs/` location for manifests saved by the browser.
-- Backward-compatible discovery of pre-v0.15.3 implicit executions stored
-  beside browser manifests under `generated/studies/`; their files are not
-  moved or rewritten.
-- Lock-aware, read-only lifecycle reconciliation. A persisted `running` state
-  is displayed as `interrupted` when no runner owns its workspace lock, while
-  the last episode and all existing evidence remain visible.
-- Catchable terminal-close signals follow the same interruption cleanup path
-  as Ctrl+C, preventing new stale `running` states when the operating system
-  permits graceful shutdown.
-- One generated product per unique configuration and one separately resolved
-  runtime configuration per replication seed.
-- A shared study environment with one dependency installation, plus a snapshot
-  of the exact Python package environment.
-- Per-attempt process logs and product artifacts linked to study, manifest,
-  configuration, seed, and execution identifiers.
-- Per-run, per-attempt artifact roots keep checkpoints from different
-  configurations, replication seeds, parallel processes, and resumed attempts
-  isolated even when those runs reuse the same generated product source.
-- Separate Configure and Explore workspaces in the browser Studio.
-- A read-only pedagogical catalog kept separate from feature descriptors and
-  constraints, so explanations cannot silently change product validity.
-- Illustrated environment lessons covering goals, observations, actions,
-  native rewards, termination, difficulty, and reward-shaping cautions.
-- Algorithm lessons for Q-Learning, DQN, DDPG, and SAC with learning equations,
-  composition diagrams, exploration behavior, appropriate use, and trade-offs.
-- Beginner explanations for all 57 built-in training, algorithm, behavior, and optimizer parameters,
-  including the effect of increasing or decreasing each value and important
-  interactions with other settings.
-- Live environment–algorithm composition commentary that explains action,
-  observation, bound, learning-representation, and exploration compatibility.
-- Contextual explanations for validation/advisory codes, evaluation metrics,
-  statistical summaries, plots, exports, HPO concepts, and checkpoint policies.
-- An Explore glossary and explicit `valid configurations × seeds = planned runs`
-  explanation, with candidate, exclusion, conditional-axis, deduplication,
-  preview-limit, frozen-manifest, and execution-metadata terminology.
-- Academic source links embedded directly in the learning guide.
-- A third browser workspace, **Monitor**, that discovers both top-level
-  generated products and study executions without turning execution state into
-  variability.
-- Fluid widescreen layouts across Configure, Explore, SPL model, and Monitor,
-  with adaptive page gutters instead of narrow fixed canvases.
-- A proportional three-column monitoring workspace on large displays and a
-  structured full-width run-evidence grid at laptop widths. Primary cards and
-  tables use natural page scrolling rather than competing nested scroll panes.
-- On three-column screens, the selected run-evidence pane stays within the
-  viewport and scrolls independently; narrower layouts return it to the normal
-  full-width document flow.
-- Read-only monitoring APIs for execution lists, complete study snapshots, and
-  individual run evidence, with workspace-bound path validation and file-size
-  limits.
-- Automatic three-second refresh plus manual refresh, run status, algorithm,
-  behavior, and optimizer filters, text search, execution progress, and per-run
-  training progress.
-- Inline SVG reward curves with a rolling mean, evaluation metrics, artifact
-  inventories, resolved configurations, run metadata, and process-log tails.
-- Configuration comparison across completed replication seeds; unfinished or
-  failed runs are never silently converted into numeric zeroes.
-- An automatic terminal study summary reports evidence coverage, replication
-  completion, variability counts, and tied reward/success leaders separately
-  for each environment; it never ranks incomparable reward scales across tasks.
-- A resolved variability map that separates explicit study axes from
-  component-dependent default changes and displays exact hyperparameter values
-  for every configuration and selected run.
-- A grouped, wrapping Products & Studies navigator with type/status badges,
-  composition summaries, run counts, timestamps, and no horizontal card
-  overflow.
-- A dedicated live HPO dashboard with objective and best-so-far curves, trial
-  and seed-fit progress, per-seed scores, ranked trials, declared domains,
-  selected parameter values, final-evaluation metrics, and failure evidence.
-- A read-only `/api/monitor/hpo` projection shared by direct products and study
-  executions. Monitoring never changes sampler, agent, parameters, or status.
-- Lightweight `training-progress.jsonl` telemetry emitted at the configured log
-  interval. Telemetry writes are observational and cannot fail training.
-- A dedicated **SPL model** workspace that makes commonalities, variation
-  points, mandatory and optional features, XOR/OR groups, and cardinalities
-  explicit.
-- A catalog-derived feature hierarchy: registering a new environment or
-  algorithm plug-in adds its feature without editing a separate diagram.
-- Capability-derived environment–algorithm, algorithm–behavior, and
-  algorithm–optimizer matrices showing every contract match and exclusion.
-- Thirty explicit structural, capability, parameter, search, evaluation,
-  and availability constraints with stable identifiers and formal expressions.
-- A live application-engineering trace that highlights the current Configure
-  selection and maps resolver diagnostics back to the violated constraint.
-- An explicit paper-to-Studio alignment for RLSPL rules HC1–HC8 and EC1–EC5,
-  including encapsulated provider details and the revised comparative-run rule.
-- A visible domain-engineering → application-engineering → derivation flow,
-  while device, status, timestamps, seeds, and artifacts remain execution
-  metadata outside the feature model.
+## Overview
 
-The base environment–algorithm Cartesian product contains 16 valid pairings.
-Q-Learning and DQN can each compose with discrete MountainCar, CartPole,
-Acrobot, or discrete LunarLander. DDPG and SAC can each compose with continuous
-MountainCar, Pendulum, continuous LunarLander, or BipedalWalker. These products
-are derived from capability contracts; there is no environment–algorithm
-whitelist.
+Reinforcement Learning experiments are affected by several forms of variability:
 
-Adding action behavior and optimizer variation produces 168 complete,
-generatable structural compositions from the raw 1,024-way Cartesian space.
-Q-Learning supports three Q-score behaviors and the direct tabular update. DQN
-supports four behaviors; DDPG supports five; SAC supports four. Each deep
-algorithm accepts Adam, RMSprop, or SGD through the same gradient-optimizer
-contract. Invalid combinations remain visible as explained cross-tree
-exclusions rather than disappearing from the model.
+* the selected environment;
+* the learning algorithm;
+* optimization choices;
+* exploration and action-selection mechanisms;
+* numerical hyperparameters;
+* random seeds and execution conditions.
 
-CartPole is a single built-in environment. The default `plugins/` directory
-contains documentation only, so starting Studio with `--plugins plugins` does
-not add a duplicate CartPole entry. Future environment variants should use a
-distinct task name and globally unique component ID.
+RLSPL Studio provides a structured way to manage these choices and investigate how they affect the behavior of an RL system.
 
-Hyperparameter search is an optional product feature, not an external service.
-Its selected sampler, objective, aggregation, budget, and parameter domains are
-configuration choices. Running-trial status, timings, sampled values, scores,
-and the winning trial are execution metadata recorded after derivation.
+The tool is designed for both:
 
-Theoretical feasibility and resource feasibility are separate. A large dense
-Q-table never blocks generation: `RES-01` reports its estimated number of
-values and float32 memory footprint as a non-blocking advisory.
+* **beginners**, who need guidance when constructing valid RL configurations;
+* **researchers**, who need controlled and reproducible variability studies.
 
-## Inspect the software product line
+---
 
-Open the browser editor and choose **SPL model** in the top navigation. This
-workspace presents three connected views of the same live product line:
+## Main Features
 
-- the feature hierarchy explains shared features and variation points;
-- the environment × algorithm, algorithm × behavior, and algorithm × optimizer
-  matrices expose valid compositions and cross-branch exclusions; and
-- the constraint table evaluates the current Configure selection as satisfied,
-  violated, advisory, or not applicable.
+### Configure RL Products
 
-The feature hierarchy and compatibility matrix are computed from the component
-registry. The configuration trace is computed by the same resolver that gates
-generation. They are therefore inspectable projections of executable Studio
-semantics, not a second hardcoded model that can drift away from the generator.
-The paper-alignment panel also states where the clean-room Studio preserves,
-encapsulates, or deliberately revises the published RLSPL rules.
+Build an RL configuration by selecting its main structural and numerical components.
 
-## Hyperparameter optimization and exploration
+A product can include:
 
-An exploration study is distinct from hyperparameter optimization. It expands
-explicit finite axes for comparison and does not require an objective or select
-a winning configuration. Each candidate passes through the same capability and
-constraint resolver used for single products.
+* **Environment**
+* **Agent / RL algorithm**
+* **Optimizer**
+* **Action-selection behavior**
+* **Network architecture**
+* **Training hyperparameters**
+* **Execution parameters**
 
-### Run hyperparameter optimization
+RLSPL validates compatibility between selected features before the product is executed.
 
-In **Configure**, enable **Hyperparameter search**, then change at least one
-parameter from **Fixed** to **Tunable** and declare its domain. Numeric float
-domains can use a linear or logarithmic scale; integer and categorical domains
-keep their native type. Choose either:
+---
 
-- **Random Search**, a transparent baseline that samples every domain
-  independently; or
-- **Bayesian TPE**, which begins with random proposals and then favors values
-  that occur more densely among better completed trials.
+### Constraint-Aware Configuration
 
-For every proposal, Studio trains one agent per trial seed and aggregates their
-objective values. The approximate training workload is:
+Not every combination of RL components is meaningful.
+
+RLSPL uses capability and dependency constraints to prevent or identify incompatible configurations.
+
+Examples include:
+
+* continuous-control algorithms require continuous action spaces;
+* DQN requires a discrete action space;
+* Ornstein–Uhlenbeck noise requires compatible continuous-control capabilities;
+* entropy-based action sampling requires an appropriate stochastic policy;
+* algorithm-specific hyperparameters are activated only when the corresponding capability is selected.
+
+This separates **valid RL products** from arbitrary combinations of implementation options.
+
+---
+
+### Explore the Configuration Space
+
+The **Explore** interface allows users to investigate valid combinations of RL features and understand the effect of changing individual configuration decisions.
+
+RLSPL distinguishes between:
+
+* **structural variability** — changing components such as the algorithm, optimizer, or action-selection mechanism;
+* **numerical variability** — changing hyperparameters;
+* **execution variability** — repeating an otherwise identical configuration under different random seeds.
+
+---
+
+### Variability Studies
+
+The **Studies** interface supports controlled experiments over selected variability dimensions.
+
+For example, a study can keep the environment and algorithm fixed while varying the action-selection strategy:
 
 ```text
-trial fits = number of trials × number of trial training seeds
-total fits = trial fits + one final fit of the selected parameters
+Action Selection
+├── Greedy
+├── Random Mixture
+├── Boltzmann
+└── Parameter Noise
 ```
 
-The trial seeds should normally be disjoint from final-evaluation seeds. The
-sampler seed controls only the reproducible proposal sequence; it does not
-replace stochastic training replication. Large searches remain valid, but
-`ADV-06` warns when the declared search implies at least 500 trial fits.
+or the optimizer:
 
-The included DQN/LunarLander configuration demonstrates a two-dimensional TPE
-search:
+```text
+Optimizer
+├── Adam
+└── RMSprop
+```
+
+or a numerical parameter:
+
+```text
+Learning Rate
+├── 1e-4
+├── 5e-4
+└── 1e-3
+```
+
+Multiple training seeds can then be associated with each valid configuration.
+
+The resulting experiment is generated from an explicit variability definition rather than from independently assembled scripts.
+
+---
+
+### Experiment Monitoring
+
+The **Monitor** interface provides access to training and evaluation information for individual configurations and study executions.
+
+Depending on the experiment, RLSPL records information such as:
+
+* episode return;
+* training reward curves;
+* evaluation return;
+* environment steps;
+* success rate when defined by the environment;
+* execution seed;
+* configuration metadata.
+
+Completed configurations and studies can also be revisited from the interface.
+
+---
+
+### Hyperparameter Optimization
+
+RLSPL includes optional support for **Hyperparameter Optimization (HPO)**.
+
+Users can define an active numerical search space over selected hyperparameters while preserving the surrounding RL product configuration.
+
+Supported search strategies include:
+
+* Random Search
+* Bayesian Optimization
+
+This allows HPO experiments to remain connected to the same explicit configuration and evaluation workflow used throughout RLSPL.
+
+---
+
+## Supported RL Components
+
+### Environments
+
+RLSPL currently includes Gymnasium environments covering discrete and continuous control.
+
+| Environment   | Action Space | Task               |
+| ------------- | ------------ | ------------------ |
+| `CartPole`    | Discrete     | Balancing          |
+| `Acrobot`     | Discrete     | Swing-up control   |
+| `MountainCar` | Discrete     | Goal-reaching      |
+| `LunarLander` | Discrete     | Landing control    |
+| `Pendulum`    | Continuous   | Continuous control |
+
+---
+
+### Algorithms
+
+| Algorithm  | Family                       |
+| ---------- | ---------------------------- |
+| Q-Learning | Value-based                  |
+| DQN        | Deep value-based             |
+| DDPG       | Actor-Critic / deterministic |
+| SAC        | Actor-Critic / stochastic    |
+
+Available algorithms depend on the capabilities of the selected environment.
+
+---
+
+### Optimizers
+
+Currently supported:
+
+* Adam
+* RMSprop
+
+---
+
+### Action-Selection Behaviors
+
+Depending on algorithm capabilities and action-space type, RLSPL supports behaviors including:
+
+**Discrete / value-based**
+
+* Greedy
+* Random Mixture
+* Boltzmann
+* Parameter Noise
+
+**Continuous / actor-based**
+
+* Deterministic
+* Gaussian Noise
+* Ornstein–Uhlenbeck Noise
+* Entropy Sampling
+
+Compatibility is checked before execution.
+
+
+---
+
+## Installation
+
+### Requirements
+
+Recommended:
+
+```text
+Python 3.10+
+pip
+venv or virtualenv
+Git
+```
+
+Clone the repository:
 
 ```bash
-PYTHONPATH=src python -m rlspl_studio.cli validate \
-  examples/dqn-lunar-hpo.json
-
-PYTHONPATH=src python -m rlspl_studio.cli generate \
-  examples/dqn-lunar-hpo.json \
-  --output generated/dqn-lunar-hpo
-
-cd generated/dqn-lunar-hpo
-python3 -m pip install -e .
-python3 run.py
+git clone <YOUR-GITHUB-REPOSITORY>
+cd <YOUR-REPOSITORY>
 ```
 
-That example deliberately represents a substantial experiment: 30 trials × 3
-trial seeds means 90 trial fits before the final fit. Reduce its training
-budget and trial count for a quick pipeline check.
-
-An HPO run adds these artifacts alongside the final agent checkpoint, metrics,
-evaluation records, and reward trace:
-
-- `hpo-summary.json`: atomically refreshed live status, search definition,
-  history, leaders, winner, and final metrics;
-- `hpo-trials.jsonl`: append-only terminal record for every attempted trial;
-- `hpo-trials/trial-NNNN/seed-S/`: per-seed trial configurations and evidence;
-  and
-- `best-configuration.json`: the winning domains materialized as fixed values.
-
-Open **Monitor** with the same workspace while the product runs. The HPO panel
-updates every three seconds and separates the search phase from the final fit
-and independent final evaluation.
-
-### Explore finite configuration variability
-
-Preview the supplied environment–algorithm study:
+Create a virtual environment:
 
 ```bash
-PYTHONPATH=src python -m rlspl_studio.cli explore \
-  examples/explore-algorithms-environments.json \
-  --verbose
+python3 -m venv .venv
+source .venv/bin/activate
 ```
 
-Save its frozen manifest:
+On Windows:
 
 ```bash
-PYTHONPATH=src python -m rlspl_studio.cli explore \
-  examples/explore-algorithms-environments.json \
-  --manifest generated-studies/algorithm-environment-space.json
+.venv\Scripts\activate
 ```
 
-The supplied study defines 32 candidates. Sixteen satisfy the current
-environment–algorithm contracts and 16 are retained as excluded candidates
-with their `CAP-01` explanations. Three replication seeds yield 48 planned
-runs. A preview limit constrains materialization cost without invalidating a
-larger theoretical space; `EXP-03` records a non-blocking truncation advisory.
-
-Execute all 48 runs with two product processes at a time:
+Upgrade the packaging tools:
 
 ```bash
-rlspl run-study \
-  generated-studies/algorithm-environment-space.json \
-  --workspace generated-study-runs/algorithm-environment-space \
-  --jobs 2
+python -m pip install --upgrade pip setuptools wheel
 ```
 
-The runner revalidates the manifest and its hashes, generates the 16 unique
-products once, creates one shared virtual environment, installs the union of
-their dependencies once, then executes every configuration–training-seed pair.
-`--jobs` limits concurrent product processes; it does not change the study.
-The default is one process, which is safest for memory-intensive deep-RL runs.
-Generated source may be reused by all seeds of one configuration, but runtime
-outputs are not: every process receives its own
-`runs/<run-id>/attempt-NNN/artifacts/` root. Checkpoints therefore cannot
-overwrite a sibling seed or a previous resumed attempt.
-
-If execution is interrupted or one or more runs fail, use the identical
-manifest and workspace with `--resume`:
+Install RLSPL Studio:
 
 ```bash
-rlspl run-study \
-  generated-studies/algorithm-environment-space.json \
-  --workspace generated-study-runs/algorithm-environment-space \
-  --jobs 2 \
-  --resume
+pip install -e .
 ```
 
-Completed runs with intact metadata are not repeated. Failed, interrupted, or
-incomplete runs receive a new numbered attempt. If all dependencies are already
-installed in the active Python environment, `--no-install` skips shared virtual
-environment creation and uses that interpreter directly.
+---
 
-Each execution workspace contains:
+## Reproducibility and Traceability
 
-- `study-manifest.json`: the frozen input copied into the workspace;
-- `study-state.json`: atomically updated status for every planned run;
-- `configurations/`: seed-specific resolved configurations;
-- `products/`: one generated product per unique configuration;
-- `runs/<run-id>/attempt-NNN/`: the process log and immutable artifacts; and
-- `environment-snapshot.json`: Python, platform, and installed package versions.
+RLSPL was developed with reproducible RL experimentation as a central objective.
 
-Conditional parameter exploration is also supported:
+For meaningful comparisons, an RL experiment should preserve information such as:
 
-```bash
-PYTHONPATH=src python -m rlspl_studio.cli explore \
-  examples/explore-continuous-parameters.json \
-  --verbose
+* complete product configuration;
+* training seed;
+* evaluation seed;
+* training budget;
+* software dependencies;
+* environment version;
+* evaluation protocol;
+* checkpoint-selection policy.
+
+RLSPL makes these decisions explicit and connects experimental outputs to the configuration from which they were produced.
+
+A fixed configuration should **not** be interpreted as guaranteeing a fixed empirical result. RL training remains stochastic, and repeated executions of the same numerical and structural configuration may produce different learning trajectories and evaluation results.
+
+---
+
+## Research
+
+RLSPL originated as a research project investigating how **Software Product Line Engineering (SPLE)** can support the systematic development and experimentation of Reinforcement Learning systems.
+
+The research behind RLSPL currently addresses several related objectives:
+
+* systematic management of RL variability;
+* reusable RL product construction;
+* configuration validity;
+* experimental traceability;
+* reproducibility;
+* controlled variability studies;
+* sensitivity analysis;
+* hyperparameter exploration;
+* structured evaluation.
+
+Two publications currently document the RLSPL approach and its experimental use.
+
+The main RLSPL paper introduces the Software Product Line approach for structuring variability and reuse in RL development:
+
+**S. Wardi, R. Mzid, and T. Ziadi.**
+*RLSPL: A Software Product Line for Streamlining Reinforcement Learning Project Development.*
+**Information and Software Technology**, Volume 190, Article 107916, 2026.
+DOI: `10.1016/j.infsof.2025.107916`
+
+A second study investigates how RLSPL can support **traceability and reproducibility in RL experimentation**:
+
+**S. Wardi, R. Mzid, and T. Ziadi.**
+*How Can the RLSPL Framework Strengthen Traceability and Reproducibility in Reinforcement Learning Projects?*
+In **Proceedings of the 21st International Conference on Evaluation of Novel Approaches to Software Engineering (ENASE 2026)**, Volume 1, pp. 113–124, SCITEPRESS, 2026.
+DOI: `10.5220/0014836400004015`
+
+---
+
+## How to Cite RLSPL
+
+If you use **RLSPL as a Software Product Line framework for constructing and managing RL products**, please cite:
+
+```bibtex
+@article{wardi2026rlspl,
+  title   = {RLSPL: A Software Product Line for Streamlining Reinforcement Learning Project Development},
+  author  = {Wardi, Syrine and Mzid, Rania and Ziadi, Tewfik},
+  journal = {Information and Software Technology},
+  volume  = {190},
+  pages   = {107916},
+  year    = {2026},
+  doi     = {10.1016/j.infsof.2025.107916}
+}
 ```
 
-That study varies `ddpg.tau` only for DDPG and `sac.tau` only for SAC. It
-crosses those settings with all four continuous-control environments and
-therefore produces 20 valid configurations instead of injecting inactive
-parameters into unrelated algorithms. The browser derives these applicability
-conditions automatically from component ownership.
+If you use RLSPL for **reproducibility, traceability, configurable evaluation, or hyperparameter exploration**, please also cite the ENASE paper:
 
-The browser's **Explore** workspace is independent from **Configure**. A v2
-study authored in the browser contains explicit environment, algorithm,
-behavior, and optimizer selections; any
-additional axis may contain one value (fixed for the study) or several values
-(varied). Settings that are not listed use documented study defaults—500
-episodes, best checkpointing, and 10 evaluation episodes—and the active
-components' catalog defaults. Training replication seeds and final-policy
-evaluation seeds are edited independently in the study's run plan; neither is
-a product-variability axis. All effective values are
-materialized in the resolved variants, so there is no hidden product base.
-Frozen v1 manifests with `base_configuration` remain readable and executable
-for compatibility, but the browser no longer authors them.
-
-Explore also supports replication seeds, candidate matrices, exclusion
-explanations, and immutable manifests. After a complete manifest is saved, it
-displays a copyable `rlspl run-study` command. The **Monitor** workspace reads
-the resulting execution state and provenance records while the study runs.
-
-To inspect action-behavior and optimizer variability together, preview the
-focused example:
-
-```bash
-PYTHONPATH=src python -m rlspl_studio.cli explore \
-  examples/explore-behaviors-optimizers.json \
-  --limit 256
+```bibtex
+@inproceedings{wardi2026rlsplreproducibility,
+  title     = {How Can the RLSPL Framework Strengthen Traceability and Reproducibility in Reinforcement Learning Projects?},
+  author    = {Wardi, Syrine and Mzid, Rania and Ziadi, Tewfik},
+  booktitle = {Proceedings of the 21st International Conference on Evaluation of Novel Approaches to Software Engineering (ENASE 2026)},
+  volume    = {1},
+  pages     = {113--124},
+  publisher = {SCITEPRESS},
+  year      = {2026},
+  doi       = {10.5220/0014836400004015}
+}
 ```
 
-It deliberately expands 256 candidates across two environments, four
-algorithms, eight behaviors, and four optimizers. Contract resolution preserves
-42 valid configurations and explains the other 214 with `CAP-*`, `BEH-*`, and
-`OPT-*` exclusions.
+For work relying on both the **RLSPL framework** and its **experimental reproducibility capabilities**, citing both publications is recommended.
 
-## Monitor agents without changing them
+---
 
-Keep the Studio open with the same generated-product workspace used when the
-manifest was saved:
 
-```bash
-rlspl studio --workspace generated --plugins plugins
-```
 
-Open **Monitor**. Every top-level product generated into the selected workspace
-appears immediately, even before it has been trained. Runs written to that
-product's `runs/` directory appear under it. Study executions created by the
-command shown after **Save manifest** are discovered under
-`generated/study-runs/`. The dashboard refreshes every three seconds by default
-and can be refreshed manually.
 
-`--workspace` is optional for `run-study`. Given a browser-saved manifest such
-as `generated/studies/example-abc123.json`, the implicit execution workspace is
-`generated/study-runs/example-abc123`, so the same Studio sees it. Monitor also
-recognizes older implicit workspaces that were created beside manifests in
-`generated/studies/`.
 
-Runner status is verified against the workspace lock. If a terminal or process
-is closed before it can finalize `study-state.json`, Monitor preserves that
-recorded state as provenance but presents the effective execution status as
-**interrupted**, with the last persisted training episode. Resume it by using
-the exact same manifest and execution workspace with `--resume`.
 
-The left navigator groups products and studies and shows their composition,
-status, run counts, timestamp, and progress. For a study, the dashboard shows
-runner status, completed/running/pending/failed counts, overall progress,
-configuration, algorithm, behavior, and optimizer filters, and a comparison
-table aggregated across completed seeds. Once execution stops, an automatic
-summary reports evidence coverage and replication completion, then identifies
-reward and native-success leaders within each environment only. The variability
-map is derived from resolved configurations:
-it shows explicit axes first, then component-dependent hyperparameter changes.
-For an individual product it exposes the complete effective hyperparameter set
-even when no run exists yet. Selecting a run opens its exact configuration,
-highlights the values that vary, and shows its reward trace, rolling mean,
-evaluation metrics, artifacts, immutable run metadata, and process-log tail.
-Every reward card, chart, table, comparison, and HPO objective names the exact
-environment success predicate used by the runtime, or clearly marks the task as
-return-only when no native binary success event exists.
-For an HPO run, a separate panel additionally shows trial progress, objective
-history, per-seed scores, leading proposals, the winning fixed values, and the
-final evaluation. Failed trials remain visible and are never converted to
-objective value zero.
-
-Newly generated products append `training-progress.jsonl` at
-`training.log_interval`, so a running agent exposes a sparse live curve without
-changing the learning loop. After completion, the dashboard uses the full
-`training-reward-trace.csv`. Older completed products remain monitorable through
-their existing state, metrics, trace, and metadata files.
-
-## Learning inside the Studio
-
-The browser presents a short explanation next to the choice being edited and a
-deeper lesson through **Learning guide** or the `?` controls. Environment and
-algorithm cards include original inline diagrams. Parameter rows use readable
-names while preserving the exact configuration key underneath.
-
-Reward-shaping material is explicitly labeled **Theory only**. It explains how
-reward design can affect learning and policy invariance, but it does not modify
-the generated environment reward. Likewise, learning text is read-only catalog
-metadata: the resolver, capability model, generator, and runtime remain the only
-authorities for product behavior.
-
-The embedded references include Sutton and Barto's reinforcement-learning text,
-the original Q-Learning, DQN, DDPG, and SAC publications, Ng et al.'s
-policy-invariant reward-shaping result, reproducibility guidance from Henderson
-et al. and Agarwal et al., the Adam and AMSGrad papers, the original RMSprop
-lecture, Bottou et al.'s large-scale optimization survey, Bergstra et al.'s
-Random Search and TPE work, and the RLSPL publication.
-
-## Add components without changing the core
-
-RLSPL discovers `component.json` manifests recursively under `plugins/`.
-Environment, algorithm, action-behavior, and optimizer plug-ins can contribute
-their descriptors and runtime templates without changing `catalog.py`, the
-resolver, planner, generator, or web interface.
-
-```bash
-rlspl components
-```
-
-The browser marks discovered components with `plug-in`. Invalid JSON,
-incompatible contracts, duplicate IDs, missing templates, and template path
-escapes are reported without preventing valid components from loading. See
-`plugins/README.md` for the environment and algorithm contracts.
-
-## Run the tests
-
-```bash
-PYTHONPATH=src python -m unittest discover -s tests -v
-```
-
-## Validate an example
-
-```bash
-PYTHONPATH=src python -m rlspl_studio.cli validate examples/dqn-mountain-car.json
-```
-
-The command returns exit code `0` for valid configurations and `2` for invalid
-configurations. Use `--resolved` to print the effective configuration with
-defaults and component versions.
-
-## Open the configuration editor
-
-```bash
-PYTHONPATH=src python -m rlspl_studio.cli studio
-```
-
-The editor opens at `http://127.0.0.1:8765` and writes products under
-`generated/` and study manifests under `generated/studies/`. Its Configure
-workspace exposes Environment, Agent, Action behavior, Optimizer/update rule,
-Training, optional Hyperparameter Search, and Evaluation; its Explore workspace
-defines finite variability studies.
-Execution information is not editable.
-After generation, the interface displays the exact product path and copyable
-installation and execution commands.
-
-## Generate an executable product
-
-```bash
-PYTHONPATH=src python -m rlspl_studio.cli generate \
-  examples/q-learning-mountain-car.json \
-  --output generated/mountain-car-q-learning
-
-cd generated/mountain-car-q-learning
-python3 -m pip install -e .
-python3 run.py
-```
-
-The explicit DQN + Boltzmann + RMSprop example demonstrates independent
-selection of both new component axes:
-
-```bash
-PYTHONPATH=src python -m rlspl_studio.cli generate \
-  examples/dqn-boltzmann-rmsprop.json \
-  --output generated/dqn-boltzmann-rmsprop
-```
-
-For DQN, use the supplied examples:
-
-```bash
-PYTHONPATH=src python -m rlspl_studio.cli generate \
-  examples/dqn-mountain-car.json \
-  --output generated/dqn-mountain-car
-
-PYTHONPATH=src python -m rlspl_studio.cli generate \
-  examples/dqn-lunar-lander.json \
-  --output generated/dqn-lunar-lander
-
-PYTHONPATH=src python -m rlspl_studio.cli generate \
-  examples/dqn-cart-pole.json \
-  --output generated/dqn-cart-pole
-
-PYTHONPATH=src python -m rlspl_studio.cli generate \
-  examples/dqn-acrobot.json \
-  --output generated/dqn-acrobot
-```
-
-The continuous-control examples use DDPG or SAC:
-
-```bash
-PYTHONPATH=src python -m rlspl_studio.cli generate \
-  examples/ddpg-lunar-lander-continuous.json \
-  --output generated/ddpg-lunar-lander-continuous
-
-PYTHONPATH=src python -m rlspl_studio.cli generate \
-  examples/ddpg-bipedal-walker.json \
-  --output generated/ddpg-bipedal-walker
-
-PYTHONPATH=src python -m rlspl_studio.cli generate \
-  examples/sac-lunar-lander-continuous.json \
-  --output generated/sac-lunar-lander-continuous
-
-PYTHONPATH=src python -m rlspl_studio.cli generate \
-  examples/sac-bipedal-walker.json \
-  --output generated/sac-bipedal-walker
-
-PYTHONPATH=src python -m rlspl_studio.cli generate \
-  examples/ddpg-mountain-car-continuous.json \
-  --output generated/ddpg-mountain-car-continuous
-
-PYTHONPATH=src python -m rlspl_studio.cli generate \
-  examples/sac-pendulum.json \
-  --output generated/sac-pendulum
-```
-
-Equivalent Q-Learning, DQN, DDPG, and SAC examples are supplied for every
-compatible new pairing. Pendulum examples intentionally omit `success_rate`:
-the standard task ends only by time limit and is evaluated by its return.
-
-LunarLander with tabular Q-Learning is also generatable:
-
-```bash
-PYTHONPATH=src python -m rlspl_studio.cli generate \
-  examples/q-learning-lunar-lander.json \
-  --output generated/q-learning-lunar-lander
-```
-
-Its default 12-bin, eight-dimensional discretization is intentionally accepted
-but accompanied by a `RES-01` memory advisory. Reduce the bin count before
-execution if the estimated table does not fit the target machine.
-
-## Design rule
-
-The Studio UI will consume this package through service methods. It must never
-import environment or algorithm implementations directly. Generated products
-will contain only selected runtime components.
-
-Execution is deliberately absent from `UserConfiguration`. Runtime facts such
-as the effective device, platform, timestamps, component versions, seeds, and
-artifact locations belong to the immutable `RunMetadata` record.
-
-## Design references
-
-- E. Wardi, R. Mzid, and T. Ziadi, “RLSPL: A software product line for streamlining
-  reinforcement learning,” *Information and Software Technology*, 2025.
-  <https://doi.org/10.1016/j.infsof.2025.107916>
-- K. Kang et al., *Feature-Oriented Domain Analysis (FODA) Feasibility Study*,
-  Software Engineering Institute, 1990.
-  <https://resources.sei.cmu.edu/library/asset-view.cfm?assetid=11231>
-- S. Apel et al., *Feature-Oriented Software Product Lines: Concepts and
-  Implementation*, Springer, 2013.
-  <https://doi.org/10.1007/978-3-642-37521-7>
-- K. Pohl, G. Böckle, and F. van der Linden, *Software Product Line
-  Engineering*, Springer, 2005. <https://doi.org/10.1007/3-540-28901-1>
-- D. Benavides, S. Segura, and A. Ruiz-Cortés, “Automated analysis of feature
-  models 20 years later,” *Information Systems*, 2010.
-  <https://doi.org/10.1016/j.is.2009.01.001>
-- P. Henderson et al., “Deep Reinforcement Learning That Matters,” AAAI, 2018.
-  <https://doi.org/10.1609/aaai.v32i1.11694>
-- J. Bergstra and Y. Bengio, “Random Search for Hyper-Parameter Optimization,”
-  *Journal of Machine Learning Research*, 2012.
-  <https://jmlr.org/papers/v13/bergstra12a.html>
-- J. Bergstra et al., “Algorithms for Hyper-Parameter Optimization,” NeurIPS,
-  2011.
-  <https://papers.nips.cc/paper/4443-algorithms-for-hyper-parameter-optimization>
-- C. Watkins and P. Dayan, “Q-learning,” *Machine Learning*, 1992.
-  <https://doi.org/10.1007/BF00992698>
-- V. Mnih et al., “Human-level control through deep reinforcement learning,”
-  *Nature*, 2015. <https://doi.org/10.1038/nature14236>
-- T. Lillicrap et al., “Continuous control with deep reinforcement learning,”
-  ICLR, 2016. <https://arxiv.org/abs/1509.02971>
-- T. Haarnoja et al., “Soft Actor-Critic: Off-Policy Maximum Entropy Deep
-  Reinforcement Learning with a Stochastic Actor,” ICML, 2018.
-  <https://proceedings.mlr.press/v80/haarnoja18b.html>
-- A. Barto, R. Sutton, and C. Anderson, “Neuronlike Adaptive Elements That Can
-  Solve Difficult Learning Control Problems,” *IEEE Transactions on Systems,
-  Man, and Cybernetics*, 1983. <https://doi.org/10.1109/TSMC.1983.6313077>
-- R. Sutton, “Generalization in Reinforcement Learning: Successful Examples
-  Using Sparse Coarse Coding,” NeurIPS, 1996.
-  <https://proceedings.neurips.cc/paper/1995/hash/8f1d43620bc6bb580df6e80b0dc05c48-Abstract.html>
-- A. Moore, *Efficient Memory-based Learning for Robot Control*, University of
-  Cambridge Technical Report 209, 1990.
-  <https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-209.pdf>
