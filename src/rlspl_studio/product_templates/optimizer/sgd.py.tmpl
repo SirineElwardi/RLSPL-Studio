@@ -1,0 +1,25 @@
+"""Stochastic-gradient-descent component selected by the product configuration."""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from typing import Any
+
+import torch
+
+
+def make_optimizer(
+    parameters: dict[str, Any],
+    model_parameters: Iterable[torch.Tensor],
+    learning_rate: float,
+    role: str,
+) -> torch.optim.Optimizer:
+    """Create an independent SGD instance for one algorithm role."""
+
+    del role
+    return torch.optim.SGD(
+        model_parameters,
+        lr=float(learning_rate),
+        momentum=float(parameters.get("optimizer.sgd.momentum", 0.0)),
+        weight_decay=float(parameters.get("optimizer.sgd.weight_decay", 0.0)),
+    )

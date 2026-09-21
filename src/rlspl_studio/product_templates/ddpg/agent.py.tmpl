@@ -1,0 +1,258 @@
+"""Deep Deterministic Policy Gradient agent for bounded continuous actions."""
+
+from __future__ import annotations
+
+import copy
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import torch
+from torch import nn
+from torch.nn import functional as F
+
+from .optimizer import make_optimizer
+
+
+class Actor(nn.Module):
+    def __init__(
+        self,
+        observation_dimension: int,
+        action_dimension: int,
+        hidden_dimension: int,
+        action_low: np.ndarray,
+        action_high: np.ndarray,
+    ) -> None:
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(observation_dimension, hidden_dimension),
+            nn.ReLU(),
+            nn.Linear(hidden_dimension, hidden_dimension),
+            nn.ReLU(),
+            nn.Linear(hidden_dimension, action_dimension),
+            nn.Tanh(),
+        )
+        low = torch.as_tensor(action_low, dtype=torch.float32)
+        high = torch.as_tensor(action_high, dtype=torch.float32)
+        self.register_buffer("action_scale", (high - low) / 2.0)
+        self.register_buffer("action_bias", (high + low) / 2.0)
+
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        return self.layers(observations) * self.action_scale + self.action_bias
+
+
+class Critic(nn.Module):
+    def __init__(
+        self,
+        observation_dimension: int,
+        action_dimension: int,
+        hidden_dimension: int,
+    ) -> None:
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(observation_dimension + action_dimension, hidden_dimension),
+            nn.ReLU(),
+            nn.Linear(hidden_dimension, hidden_dimension),
+            nn.ReLU(),
+            nn.Linear(hidden_dimension, 1),
+        )
+
+    def forward(
+        self, observations: torch.Tensor, actions: torch.Tensor
+    ) -> torch.Tensor:
+        return self.layers(torch.cat((observations, actions), dim=-1))
+
+
+class DDPGAgent:
+    def __init__(
+        self,
+        observation_dimension: int,
+        action_low: np.ndarray,
+        action_high: np.ndarray,
+        hidden_dimension: int,
+        actor_learning_rate: float,
+        critic_learning_rate: float,
+        gamma: float,
+        tau: float,
+        seed: int,
+        parameters: dict[str, Any] | None = None,
+    ) -> None:
+        self.observation_dimension = int(observation_dimension)
+        self.action_low = np.asarray(action_low, dtype=np.float32).reshape(-1)
+        self.action_high = np.asarray(action_high, dtype=np.float32).reshape(-1)
+        if self.action_low.shape != self.action_high.shape:
+            raise ValueError("continuous action bounds must have the same shape")
+        if not np.all(np.isfinite(self.action_low)) or not np.all(np.isfinite(self.action_high)):
+            raise ValueError("DDPG requires finite continuous action bounds")
+        if np.any(self.action_high <= self.action_low):
+            raise ValueError("every action upper bound must exceed its lower bound")
+        self.action_dimension = int(self.action_low.size)
+        self.hidden_dimension = int(hidden_dimension)
+        self.gamma = float(gamma)
+        self.tau = float(tau)
+        self.rng = np.random.default_rng(seed)
+
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        torch.use_deterministic_algorithms(True, warn_only=True)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        actor_arguments = (
+            self.observation_dimension,
+            self.action_dimension,
+            self.hidden_dimension,
+            self.action_low,
+            self.action_high,
+        )
+        self.actor = Actor(*actor_arguments).to(self.device)
+        self.target_actor = Actor(*actor_arguments).to(self.device)
+        critic_arguments = (
+            self.observation_dimension,
+            self.action_dimension,
+            self.hidden_dimension,
+        )
+        self.critic = Critic(*critic_arguments).to(self.device)
+        self.target_critic = Critic(*critic_arguments).to(self.device)
+        self.target_actor.load_state_dict(self.actor.state_dict())
+        self.target_critic.load_state_dict(self.critic.state_dict())
+        self.target_actor.eval()
+        self.target_critic.eval()
+        optimizer_parameters = parameters or {}
+        self.actor_optimizer = make_optimizer(
+            optimizer_parameters,
+            self.actor.parameters(),
+            float(actor_learning_rate),
+            "actor",
+        )
+        self.critic_optimizer = make_optimizer(
+            optimizer_parameters,
+            self.critic.parameters(),
+            float(critic_learning_rate),
+            "critic",
+        )
+        self.perturbed_actor: Actor | None = None
+
+    def _action_from_actor(self, observation: np.ndarray, actor: Actor) -> np.ndarray:
+        tensor = torch.as_tensor(
+            np.asarray(observation, dtype=np.float32).reshape(1, -1),
+            device=self.device,
+        )
+        with torch.no_grad():
+            action = actor(tensor).cpu().numpy()[0]
+        return np.clip(action, self.action_low, self.action_high).astype(np.float32)
+
+    def deterministic_action(self, observation: np.ndarray) -> np.ndarray:
+        return self._action_from_actor(observation, self.actor)
+
+    def behavior_action(self, observation: np.ndarray) -> np.ndarray:
+        return self.deterministic_action(observation)
+
+    def reset_noise(self) -> None:
+        """Legacy no-op: stateful exploration now belongs to BehaviorPolicy."""
+        return None
+
+    def reset_parameter_noise(self, sigma: float, rng: np.random.Generator) -> None:
+        self.perturbed_actor = copy.deepcopy(self.actor).to(self.device)
+        self.perturbed_actor.eval()
+        with torch.no_grad():
+            for parameter in self.perturbed_actor.parameters():
+                noise = rng.normal(0.0, float(sigma), tuple(parameter.shape))
+                parameter.add_(torch.as_tensor(noise, dtype=parameter.dtype, device=self.device))
+
+    def perturbed_action(self, observation: np.ndarray) -> np.ndarray:
+        if self.perturbed_actor is None:
+            raise RuntimeError("parameter-noise behavior was not reset for this episode")
+        return self._action_from_actor(observation, self.perturbed_actor)
+
+    def select_action(self, observation: np.ndarray, epsilon: float = 0.0) -> np.ndarray:
+        """Backward-compatible deterministic facade."""
+        return self.deterministic_action(observation)
+
+    def learn(
+        self,
+        observations: np.ndarray,
+        actions: np.ndarray,
+        rewards: np.ndarray,
+        next_observations: np.ndarray,
+        terminated: np.ndarray,
+    ) -> dict[str, float]:
+        states = torch.as_tensor(observations, dtype=torch.float32, device=self.device)
+        action_tensor = torch.as_tensor(actions, dtype=torch.float32, device=self.device)
+        reward_tensor = torch.as_tensor(
+            rewards, dtype=torch.float32, device=self.device
+        ).unsqueeze(1)
+        next_states = torch.as_tensor(
+            next_observations, dtype=torch.float32, device=self.device
+        )
+        terminal_tensor = torch.as_tensor(
+            terminated, dtype=torch.float32, device=self.device
+        ).unsqueeze(1)
+
+        with torch.no_grad():
+            target_actions = self.target_actor(next_states)
+            target_values = self.target_critic(next_states, target_actions)
+            targets = reward_tensor + self.gamma * (1.0 - terminal_tensor) * target_values
+
+        predicted = self.critic(states, action_tensor)
+        critic_loss = F.mse_loss(predicted, targets)
+        self.critic_optimizer.zero_grad(set_to_none=True)
+        critic_loss.backward()
+        nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=10.0)
+        self.critic_optimizer.step()
+
+        actor_loss = -self.critic(states, self.actor(states)).mean()
+        self.actor_optimizer.zero_grad(set_to_none=True)
+        actor_loss.backward()
+        nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=10.0)
+        self.actor_optimizer.step()
+        self._soft_update(self.target_actor, self.actor)
+        self._soft_update(self.target_critic, self.critic)
+        return {
+            "actor_loss": float(actor_loss.item()),
+            "critic_loss": float(critic_loss.item()),
+        }
+
+    def _soft_update(self, target: nn.Module, source: nn.Module) -> None:
+        with torch.no_grad():
+            for target_parameter, source_parameter in zip(
+                target.parameters(), source.parameters()
+            ):
+                target_parameter.mul_(1.0 - self.tau)
+                target_parameter.add_(source_parameter, alpha=self.tau)
+
+    def save(self, path: Path) -> None:
+        torch.save(
+            {
+                "actor": self.actor.state_dict(),
+                "target_actor": self.target_actor.state_dict(),
+                "critic": self.critic.state_dict(),
+                "target_critic": self.target_critic.state_dict(),
+                "actor_optimizer": self.actor_optimizer.state_dict(),
+                "critic_optimizer": self.critic_optimizer.state_dict(),
+                "observation_dimension": self.observation_dimension,
+                "action_low": self.action_low,
+                "action_high": self.action_high,
+                "hidden_dimension": self.hidden_dimension,
+                "gamma": self.gamma,
+                "tau": self.tau,
+            },
+            path,
+        )
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "actor": copy.deepcopy(self.actor.state_dict()),
+            "target_actor": copy.deepcopy(self.target_actor.state_dict()),
+            "critic": copy.deepcopy(self.critic.state_dict()),
+            "target_critic": copy.deepcopy(self.target_critic.state_dict()),
+            "actor_optimizer": copy.deepcopy(self.actor_optimizer.state_dict()),
+            "critic_optimizer": copy.deepcopy(self.critic_optimizer.state_dict()),
+        }
+
+    def restore(self, snapshot: dict[str, Any]) -> None:
+        self.actor.load_state_dict(snapshot["actor"])
+        self.target_actor.load_state_dict(snapshot["target_actor"])
+        self.critic.load_state_dict(snapshot["critic"])
+        self.target_critic.load_state_dict(snapshot["target_critic"])
+        self.actor_optimizer.load_state_dict(snapshot["actor_optimizer"])
+        self.critic_optimizer.load_state_dict(snapshot["critic_optimizer"])

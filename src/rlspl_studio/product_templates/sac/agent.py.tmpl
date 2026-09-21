@@ -1,0 +1,341 @@
+"""Soft Actor-Critic agent for bounded continuous actions."""
+
+from __future__ import annotations
+
+import copy
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import torch
+from torch import nn
+from torch.nn import functional as F
+from torch.distributions import Normal
+
+from .optimizer import make_optimizer
+
+
+LOG_STANDARD_DEVIATION_MINIMUM = -20.0
+LOG_STANDARD_DEVIATION_MAXIMUM = 2.0
+SQUASH_EPSILON = 1e-6
+
+
+class SquashedGaussianActor(nn.Module):
+    def __init__(
+        self,
+        observation_dimension: int,
+        action_dimension: int,
+        hidden_dimension: int,
+        action_low: np.ndarray,
+        action_high: np.ndarray,
+    ) -> None:
+        super().__init__()
+        self.backbone = nn.Sequential(
+            nn.Linear(observation_dimension, hidden_dimension),
+            nn.ReLU(),
+            nn.Linear(hidden_dimension, hidden_dimension),
+            nn.ReLU(),
+        )
+        self.mean = nn.Linear(hidden_dimension, action_dimension)
+        self.log_standard_deviation = nn.Linear(hidden_dimension, action_dimension)
+        low = torch.as_tensor(action_low, dtype=torch.float32)
+        high = torch.as_tensor(action_high, dtype=torch.float32)
+        self.register_buffer("action_scale", (high - low) / 2.0)
+        self.register_buffer("action_bias", (high + low) / 2.0)
+
+    def distribution_parameters(
+        self, observations: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        features = self.backbone(observations)
+        mean = self.mean(features)
+        log_standard_deviation = self.log_standard_deviation(features).clamp(
+            LOG_STANDARD_DEVIATION_MINIMUM, LOG_STANDARD_DEVIATION_MAXIMUM
+        )
+        return mean, log_standard_deviation
+
+    def sample(
+        self, observations: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        mean, log_standard_deviation = self.distribution_parameters(observations)
+        distribution = Normal(mean, log_standard_deviation.exp())
+        unsquashed = distribution.rsample()
+        squashed = torch.tanh(unsquashed)
+        action = squashed * self.action_scale + self.action_bias
+        log_probability = distribution.log_prob(unsquashed)
+        log_probability -= torch.log(
+            self.action_scale * (1.0 - squashed.pow(2)) + SQUASH_EPSILON
+        )
+        log_probability = log_probability.sum(dim=-1, keepdim=True)
+        deterministic_action = torch.tanh(mean) * self.action_scale + self.action_bias
+        return action, log_probability, deterministic_action
+
+
+class Critic(nn.Module):
+    def __init__(
+        self,
+        observation_dimension: int,
+        action_dimension: int,
+        hidden_dimension: int,
+    ) -> None:
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(observation_dimension + action_dimension, hidden_dimension),
+            nn.ReLU(),
+            nn.Linear(hidden_dimension, hidden_dimension),
+            nn.ReLU(),
+            nn.Linear(hidden_dimension, 1),
+        )
+
+    def forward(
+        self, observations: torch.Tensor, actions: torch.Tensor
+    ) -> torch.Tensor:
+        return self.layers(torch.cat((observations, actions), dim=-1))
+
+
+class SACAgent:
+    def __init__(
+        self,
+        observation_dimension: int,
+        action_low: np.ndarray,
+        action_high: np.ndarray,
+        hidden_dimension: int,
+        learning_rate: float,
+        gamma: float,
+        tau: float,
+        entropy_temperature: float,
+        automatic_entropy_tuning: bool,
+        seed: int,
+        parameters: dict[str, Any] | None = None,
+    ) -> None:
+        self.observation_dimension = int(observation_dimension)
+        self.action_low = np.asarray(action_low, dtype=np.float32).reshape(-1)
+        self.action_high = np.asarray(action_high, dtype=np.float32).reshape(-1)
+        if self.action_low.shape != self.action_high.shape:
+            raise ValueError("continuous action bounds must have the same shape")
+        if not np.all(np.isfinite(self.action_low)) or not np.all(np.isfinite(self.action_high)):
+            raise ValueError("SAC requires finite continuous action bounds")
+        if np.any(self.action_high <= self.action_low):
+            raise ValueError("every action upper bound must exceed its lower bound")
+        self.action_dimension = int(self.action_low.size)
+        self.hidden_dimension = int(hidden_dimension)
+        self.gamma = float(gamma)
+        self.tau = float(tau)
+        self.automatic_entropy_tuning = bool(automatic_entropy_tuning)
+        self.rng = np.random.default_rng(seed)
+
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        torch.use_deterministic_algorithms(True, warn_only=True)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        actor_arguments = (
+            self.observation_dimension,
+            self.action_dimension,
+            self.hidden_dimension,
+            self.action_low,
+            self.action_high,
+        )
+        critic_arguments = (
+            self.observation_dimension,
+            self.action_dimension,
+            self.hidden_dimension,
+        )
+        self.actor = SquashedGaussianActor(*actor_arguments).to(self.device)
+        self.critic_one = Critic(*critic_arguments).to(self.device)
+        self.critic_two = Critic(*critic_arguments).to(self.device)
+        self.target_critic_one = Critic(*critic_arguments).to(self.device)
+        self.target_critic_two = Critic(*critic_arguments).to(self.device)
+        self.target_critic_one.load_state_dict(self.critic_one.state_dict())
+        self.target_critic_two.load_state_dict(self.critic_two.state_dict())
+        self.target_critic_one.eval()
+        self.target_critic_two.eval()
+        optimizer_parameters = parameters or {}
+        self.actor_optimizer = make_optimizer(
+            optimizer_parameters,
+            self.actor.parameters(),
+            float(learning_rate),
+            "policy",
+        )
+        self.critic_optimizer = make_optimizer(
+            optimizer_parameters,
+            list(self.critic_one.parameters()) + list(self.critic_two.parameters()),
+            float(learning_rate),
+            "critics",
+        )
+
+        initial_alpha = float(entropy_temperature)
+        self.target_entropy = -float(self.action_dimension)
+        if self.automatic_entropy_tuning:
+            self.log_alpha = torch.tensor(
+                np.log(initial_alpha), dtype=torch.float32, device=self.device,
+                requires_grad=True,
+            )
+            self.alpha_optimizer = make_optimizer(
+                optimizer_parameters,
+                [self.log_alpha],
+                float(learning_rate),
+                "entropy_temperature",
+            )
+        else:
+            self.log_alpha = torch.tensor(
+                np.log(initial_alpha), dtype=torch.float32, device=self.device
+            )
+            self.alpha_optimizer = None
+
+    @property
+    def alpha(self) -> torch.Tensor:
+        return self.log_alpha.exp()
+
+    def _policy_action(self, observation: np.ndarray, stochastic: bool) -> np.ndarray:
+        tensor = torch.as_tensor(
+            np.asarray(observation, dtype=np.float32).reshape(1, -1),
+            device=self.device,
+        )
+        with torch.no_grad():
+            sampled, _, deterministic = self.actor.sample(tensor)
+            action = sampled if stochastic else deterministic
+        values = action.cpu().numpy()[0]
+        return np.clip(values, self.action_low, self.action_high).astype(np.float32)
+
+    def deterministic_action(self, observation: np.ndarray) -> np.ndarray:
+        return self._policy_action(observation, stochastic=False)
+
+    def stochastic_action(self, observation: np.ndarray) -> np.ndarray:
+        return self._policy_action(observation, stochastic=True)
+
+    def behavior_action(self, observation: np.ndarray) -> np.ndarray:
+        return self.stochastic_action(observation)
+
+    def select_action(self, observation: np.ndarray, epsilon: float = 0.0) -> np.ndarray:
+        """Backward-compatible facade; generated training uses BehaviorPolicy."""
+        return self._policy_action(observation, stochastic=epsilon > 0.0)
+
+    def learn(
+        self,
+        observations: np.ndarray,
+        actions: np.ndarray,
+        rewards: np.ndarray,
+        next_observations: np.ndarray,
+        terminated: np.ndarray,
+    ) -> dict[str, float]:
+        states = torch.as_tensor(observations, dtype=torch.float32, device=self.device)
+        action_tensor = torch.as_tensor(actions, dtype=torch.float32, device=self.device)
+        reward_tensor = torch.as_tensor(
+            rewards, dtype=torch.float32, device=self.device
+        ).unsqueeze(1)
+        next_states = torch.as_tensor(
+            next_observations, dtype=torch.float32, device=self.device
+        )
+        terminal_tensor = torch.as_tensor(
+            terminated, dtype=torch.float32, device=self.device
+        ).unsqueeze(1)
+
+        with torch.no_grad():
+            next_actions, next_log_probability, _ = self.actor.sample(next_states)
+            next_value = torch.minimum(
+                self.target_critic_one(next_states, next_actions),
+                self.target_critic_two(next_states, next_actions),
+            ) - self.alpha.detach() * next_log_probability
+            target = reward_tensor + self.gamma * (1.0 - terminal_tensor) * next_value
+
+        critic_one_loss = F.mse_loss(self.critic_one(states, action_tensor), target)
+        critic_two_loss = F.mse_loss(self.critic_two(states, action_tensor), target)
+        critic_loss = critic_one_loss + critic_two_loss
+        self.critic_optimizer.zero_grad(set_to_none=True)
+        critic_loss.backward()
+        nn.utils.clip_grad_norm_(
+            list(self.critic_one.parameters()) + list(self.critic_two.parameters()),
+            max_norm=10.0,
+        )
+        self.critic_optimizer.step()
+
+        sampled_actions, log_probability, _ = self.actor.sample(states)
+        minimum_value = torch.minimum(
+            self.critic_one(states, sampled_actions),
+            self.critic_two(states, sampled_actions),
+        )
+        actor_loss = (self.alpha.detach() * log_probability - minimum_value).mean()
+        self.actor_optimizer.zero_grad(set_to_none=True)
+        actor_loss.backward()
+        nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=10.0)
+        self.actor_optimizer.step()
+
+        alpha_loss_value = 0.0
+        if self.alpha_optimizer is not None:
+            alpha_loss = -(
+                self.log_alpha * (log_probability + self.target_entropy).detach()
+            ).mean()
+            self.alpha_optimizer.zero_grad(set_to_none=True)
+            alpha_loss.backward()
+            self.alpha_optimizer.step()
+            alpha_loss_value = float(alpha_loss.item())
+
+        self._soft_update(self.target_critic_one, self.critic_one)
+        self._soft_update(self.target_critic_two, self.critic_two)
+        return {
+            "actor_loss": float(actor_loss.item()),
+            "critic_one_loss": float(critic_one_loss.item()),
+            "critic_two_loss": float(critic_two_loss.item()),
+            "alpha_loss": alpha_loss_value,
+            "alpha": float(self.alpha.detach().item()),
+        }
+
+    def _soft_update(self, target: nn.Module, source: nn.Module) -> None:
+        with torch.no_grad():
+            for target_parameter, source_parameter in zip(
+                target.parameters(), source.parameters()
+            ):
+                target_parameter.mul_(1.0 - self.tau)
+                target_parameter.add_(source_parameter, alpha=self.tau)
+
+    def save(self, path: Path) -> None:
+        payload: dict[str, Any] = {
+            "actor": self.actor.state_dict(),
+            "critic_one": self.critic_one.state_dict(),
+            "critic_two": self.critic_two.state_dict(),
+            "target_critic_one": self.target_critic_one.state_dict(),
+            "target_critic_two": self.target_critic_two.state_dict(),
+            "actor_optimizer": self.actor_optimizer.state_dict(),
+            "critic_optimizer": self.critic_optimizer.state_dict(),
+            "log_alpha": self.log_alpha.detach().cpu(),
+            "automatic_entropy_tuning": self.automatic_entropy_tuning,
+            "observation_dimension": self.observation_dimension,
+            "action_low": self.action_low,
+            "action_high": self.action_high,
+            "hidden_dimension": self.hidden_dimension,
+            "gamma": self.gamma,
+            "tau": self.tau,
+        }
+        if self.alpha_optimizer is not None:
+            payload["alpha_optimizer"] = self.alpha_optimizer.state_dict()
+        torch.save(payload, path)
+
+    def snapshot(self) -> dict[str, Any]:
+        snapshot: dict[str, Any] = {
+            "actor": copy.deepcopy(self.actor.state_dict()),
+            "critic_one": copy.deepcopy(self.critic_one.state_dict()),
+            "critic_two": copy.deepcopy(self.critic_two.state_dict()),
+            "target_critic_one": copy.deepcopy(self.target_critic_one.state_dict()),
+            "target_critic_two": copy.deepcopy(self.target_critic_two.state_dict()),
+            "actor_optimizer": copy.deepcopy(self.actor_optimizer.state_dict()),
+            "critic_optimizer": copy.deepcopy(self.critic_optimizer.state_dict()),
+            "log_alpha": self.log_alpha.detach().clone(),
+        }
+        if self.alpha_optimizer is not None:
+            snapshot["alpha_optimizer"] = copy.deepcopy(
+                self.alpha_optimizer.state_dict()
+            )
+        return snapshot
+
+    def restore(self, snapshot: dict[str, Any]) -> None:
+        self.actor.load_state_dict(snapshot["actor"])
+        self.critic_one.load_state_dict(snapshot["critic_one"])
+        self.critic_two.load_state_dict(snapshot["critic_two"])
+        self.target_critic_one.load_state_dict(snapshot["target_critic_one"])
+        self.target_critic_two.load_state_dict(snapshot["target_critic_two"])
+        self.actor_optimizer.load_state_dict(snapshot["actor_optimizer"])
+        self.critic_optimizer.load_state_dict(snapshot["critic_optimizer"])
+        with torch.no_grad():
+            self.log_alpha.copy_(snapshot["log_alpha"])
+        if self.alpha_optimizer is not None:
+            self.alpha_optimizer.load_state_dict(snapshot["alpha_optimizer"])

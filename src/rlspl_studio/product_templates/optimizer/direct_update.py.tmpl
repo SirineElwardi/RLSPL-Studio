@@ -1,0 +1,12 @@
+"""Marker component for Q-Learning's direct tabular update."""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+def make_optimizer(*args: Any, **kwargs: Any) -> None:
+    """Reject accidental gradient use: Q-Learning updates its table directly."""
+
+    del args, kwargs
+    raise RuntimeError("direct tabular update does not construct a gradient optimizer")

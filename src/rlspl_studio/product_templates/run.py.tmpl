@@ -1,0 +1,26 @@
+"""Launch this generated product directly from its project directory."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+try:
+    from rlspl_product.main import main
+except ModuleNotFoundError as exc:
+    dependency = exc.name or "a selected runtime dependency"
+    print(
+        f"Cannot start because {dependency!r} is not installed.\n"
+        "Install this generated product first:\n"
+        "  python3 -m pip install -e .",
+        file=sys.stderr,
+    )
+    raise SystemExit(2) from exc
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

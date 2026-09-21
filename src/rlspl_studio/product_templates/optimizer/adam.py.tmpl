@@ -1,0 +1,30 @@
+"""Adam optimizer component selected by the product configuration."""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from typing import Any
+
+import torch
+
+
+def make_optimizer(
+    parameters: dict[str, Any],
+    model_parameters: Iterable[torch.Tensor],
+    learning_rate: float,
+    role: str,
+) -> torch.optim.Optimizer:
+    """Create an independent Adam instance for one algorithm role."""
+
+    del role
+    return torch.optim.Adam(
+        model_parameters,
+        lr=float(learning_rate),
+        betas=(
+            float(parameters.get("optimizer.adam.beta1", 0.9)),
+            float(parameters.get("optimizer.adam.beta2", 0.999)),
+        ),
+        eps=float(parameters.get("optimizer.adam.epsilon", 1e-8)),
+        weight_decay=float(parameters.get("optimizer.adam.weight_decay", 0.0)),
+        amsgrad=bool(parameters.get("optimizer.adam.amsgrad", False)),
+    )

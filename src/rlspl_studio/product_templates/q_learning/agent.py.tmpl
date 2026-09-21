@@ -1,0 +1,90 @@
+"""Tabular Q-Learning with deterministic state discretization."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+
+
+class QLearningAgent:
+    def __init__(
+        self,
+        observation_low: np.ndarray,
+        observation_high: np.ndarray,
+        action_count: int,
+        bins_per_dimension: int,
+        learning_rate: float,
+        gamma: float,
+        seed: int,
+    ) -> None:
+        supplied_low = np.asarray(observation_low, dtype=np.float64)
+        supplied_high = np.asarray(observation_high, dtype=np.float64)
+        self.low = np.where(np.isfinite(supplied_low), supplied_low, -10.0)
+        self.high = np.where(np.isfinite(supplied_high), supplied_high, 10.0)
+        if self.low.shape != self.high.shape or self.low.ndim != 1:
+            raise ValueError("Q-Learning requires one-dimensional vector observations")
+        if np.any(self.high <= self.low):
+            raise ValueError("every observation upper bound must exceed its lower bound")
+        self.bins = int(bins_per_dimension)
+        self.action_count = int(action_count)
+        self.learning_rate = float(learning_rate)
+        self.gamma = float(gamma)
+        self.rng = np.random.default_rng(seed)
+        shape = (self.bins,) * self.low.size + (self.action_count,)
+        self.q_table = np.zeros(shape, dtype=np.float32)
+
+    def state_index(self, observation: np.ndarray) -> tuple[int, ...]:
+        observation = np.asarray(observation, dtype=np.float64)
+        ratios = (observation - self.low) / (self.high - self.low)
+        indices = np.rint(ratios * (self.bins - 1)).astype(np.int64)
+        return tuple(np.clip(indices, 0, self.bins - 1).tolist())
+
+    def action_scores(self, observation: np.ndarray) -> np.ndarray:
+        return self.q_table[self.state_index(observation)].copy()
+
+    def deterministic_action(self, observation: np.ndarray) -> int:
+        values = self.action_scores(observation)
+        best = np.flatnonzero(values == values.max())
+        return int(self.rng.choice(best))
+
+    def behavior_action(self, observation: np.ndarray) -> int:
+        return self.deterministic_action(observation)
+
+    def select_action(self, observation: np.ndarray, epsilon: float = 0.0) -> int:
+        """Backward-compatible facade; generated training uses BehaviorPolicy."""
+        if self.rng.random() < epsilon:
+            return int(self.rng.integers(self.action_count))
+        return self.deterministic_action(observation)
+
+    def update(
+        self,
+        observation: np.ndarray,
+        action: int,
+        reward: float,
+        next_observation: np.ndarray,
+        terminated: bool,
+    ) -> None:
+        state = self.state_index(observation)
+        next_state = self.state_index(next_observation)
+        current = float(self.q_table[state + (action,)])
+        bootstrap = 0.0 if terminated else float(np.max(self.q_table[next_state]))
+        target = float(reward) + self.gamma * bootstrap
+        self.q_table[state + (action,)] = current + self.learning_rate * (target - current)
+
+    def save(self, path: Path) -> None:
+        np.savez_compressed(
+            path,
+            q_table=self.q_table,
+            observation_low=self.low,
+            observation_high=self.high,
+            bins_per_dimension=self.bins,
+        )
+
+    def snapshot(self) -> np.ndarray:
+        return self.q_table.copy()
+
+    def restore(self, snapshot: np.ndarray) -> None:
+        if snapshot.shape != self.q_table.shape:
+            raise ValueError("Q-table snapshot shape does not match the agent")
+        self.q_table[...] = snapshot

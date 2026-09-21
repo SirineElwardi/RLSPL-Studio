@@ -1,0 +1,12 @@
+"""Compatibility marker for an optimizer owned by a legacy algorithm plug-in."""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+def make_optimizer(*args: Any, **kwargs: Any) -> None:
+    """Legacy algorithms are responsible for constructing their own update rule."""
+
+    del args, kwargs
+    raise RuntimeError("the legacy algorithm owns optimizer construction")

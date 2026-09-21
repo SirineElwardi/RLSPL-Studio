@@ -1,0 +1,175 @@
+"""Replay-based DQN training engine."""
+
+from __future__ import annotations
+
+import time
+from collections import deque
+from dataclasses import dataclass
+from typing import Any, Callable
+
+import numpy as np
+
+from .agent import DQNAgent
+from .behavior import BehaviorPolicy
+from .environment import make_environment, reached_goal
+
+
+class ReplayBuffer:
+    def __init__(self, capacity: int) -> None:
+        self.transitions: deque[tuple[np.ndarray, int, float, np.ndarray, bool]] = deque(
+            maxlen=int(capacity)
+        )
+
+    def __len__(self) -> int:
+        return len(self.transitions)
+
+    def add(
+        self,
+        observation: np.ndarray,
+        action: int,
+        reward: float,
+        next_observation: np.ndarray,
+        terminated: bool,
+    ) -> None:
+        self.transitions.append((
+            np.asarray(observation, dtype=np.float32).copy(),
+            int(action),
+            float(reward),
+            np.asarray(next_observation, dtype=np.float32).copy(),
+            bool(terminated),
+        ))
+
+    def sample(self, batch_size: int, rng: np.random.Generator):
+        indices = rng.choice(len(self.transitions), size=int(batch_size), replace=False)
+        batch = [self.transitions[int(index)] for index in indices]
+        observations, actions, rewards, next_observations, terminated = zip(*batch)
+        return (
+            np.stack(observations),
+            np.asarray(actions, dtype=np.int64),
+            np.asarray(rewards, dtype=np.float32),
+            np.stack(next_observations),
+            np.asarray(terminated, dtype=np.float32),
+        )
+
+
+@dataclass(frozen=True)
+class TrainingResult:
+    agent: DQNAgent
+    rewards: tuple[float, ...]
+    steps: tuple[int, ...]
+    successes: tuple[bool, ...]
+    duration_seconds: float
+    best_snapshot: dict[str, Any]
+    periodic_snapshots: tuple[tuple[int, dict[str, Any]], ...]
+
+
+def _fixed_parameters(config: dict[str, Any]) -> dict[str, Any]:
+    parameters: dict[str, Any] = {}
+    for parameter_id, binding in config["effective_parameters"].items():
+        if binding["mode"] != "fixed":
+            raise ValueError(f"generated runtime cannot execute tunable parameter: {parameter_id}")
+        parameters[parameter_id] = binding["value"]
+    return parameters
+
+
+def train(
+    config: dict[str, Any],
+    progress: Callable[[dict[str, Any]], None] | None = None,
+) -> TrainingResult:
+    parameters = _fixed_parameters(config)
+    seed = int(parameters["training.seed"])
+    environment = make_environment()
+    environment.action_space.seed(seed)
+    observation, _ = environment.reset(seed=seed)
+    agent = DQNAgent(
+        int(np.asarray(observation).size),
+        int(environment.action_space.n),
+        int(parameters["dqn.hidden_dimension"]),
+        float(parameters["dqn.learning_rate"]),
+        float(parameters["training.gamma"]),
+        seed,
+        parameters,
+    )
+    behavior = BehaviorPolicy(agent, environment.action_space, parameters, seed)
+    buffer = ReplayBuffer(int(parameters["dqn.buffer_capacity"]))
+    batch_size = int(parameters["dqn.batch_size"])
+    target_frequency = int(parameters["dqn.target_update_frequency"])
+    budget = int(config["training_budget"])
+    budget_unit = config["training_budget_unit"]
+    rewards: list[float] = []
+    steps: list[int] = []
+    successes: list[bool] = []
+    total_steps = 0
+    episode = 0
+    best_reward = float("-inf")
+    best_snapshot = agent.snapshot()
+    periodic_snapshots: list[tuple[int, dict[str, Any]]] = []
+    log_interval = int(parameters["training.log_interval"])
+    started = time.perf_counter()
+    try:
+        while (episode < budget) if budget_unit == "episodes" else (total_steps < budget):
+            observation, _ = environment.reset(seed=seed + episode)
+            schedule_progress = min(
+                1.0,
+                (episode / max(1, budget - 1))
+                if budget_unit == "episodes"
+                else (total_steps / max(1, budget)),
+            )
+            behavior.reset_episode(episode, schedule_progress)
+            episode_reward = 0.0
+            episode_steps = 0
+            success = False
+            while True:
+                action = behavior.select_action(observation, episode, schedule_progress)
+                next_observation, reward, terminated, truncated, _ = environment.step(action)
+                buffer.add(observation, action, reward, next_observation, bool(terminated))
+                observation = next_observation
+                episode_reward += float(reward)
+                episode_steps += 1
+                total_steps += 1
+                if len(buffer) >= batch_size:
+                    agent.learn(*buffer.sample(batch_size, agent.rng))
+                if total_steps % target_frequency == 0:
+                    agent.synchronize_target()
+                budget_exhausted = budget_unit == "timesteps" and total_steps >= budget
+                if terminated or truncated or budget_exhausted:
+                    success = reached_goal(
+                        environment, observation, bool(terminated), episode_reward
+                    )
+                    break
+            rewards.append(episode_reward)
+            steps.append(episode_steps)
+            successes.append(success)
+            episode += 1
+            if episode_reward > best_reward:
+                best_reward = episode_reward
+                best_snapshot = agent.snapshot()
+            if (
+                config["checkpoint_policy"] == "periodic"
+                and episode % int(config["checkpoint_interval"]) == 0
+            ):
+                periodic_snapshots.append((episode, agent.snapshot()))
+            if progress is not None and (
+                episode % log_interval == 0
+                or (budget_unit == "episodes" and episode >= budget)
+                or (budget_unit == "timesteps" and total_steps >= budget)
+            ):
+                progress({
+                    "episode": episode,
+                    "reward": episode_reward,
+                    "steps": episode_steps,
+                    "total_steps": total_steps,
+                    "success": success,
+                    "elapsed_seconds": time.perf_counter() - started,
+                })
+    finally:
+        environment.close()
+    return TrainingResult(
+        agent=agent,
+        rewards=tuple(rewards),
+        steps=tuple(steps),
+        successes=tuple(successes),
+        duration_seconds=time.perf_counter() - started,
+        best_snapshot=best_snapshot,
+        periodic_snapshots=tuple(periodic_snapshots),
+    )

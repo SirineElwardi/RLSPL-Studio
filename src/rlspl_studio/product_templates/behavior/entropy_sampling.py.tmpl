@@ -1,0 +1,14 @@
+"""Sampling from an algorithm-owned stochastic policy."""
+
+from __future__ import annotations
+
+
+class BehaviorPolicy:
+    def __init__(self, agent, action_space, parameters, seed: int) -> None:
+        self.agent = agent
+
+    def reset_episode(self, episode: int = 0, progress: float = 0.0) -> None:
+        return None
+
+    def select_action(self, observation, step: int = 0, progress: float = 0.0):
+        return self.agent.stochastic_action(observation)

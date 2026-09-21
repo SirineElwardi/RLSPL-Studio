@@ -1,0 +1,119 @@
+"""Training engine for the selected Q-Learning product."""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from typing import Any, Callable
+
+import numpy as np
+
+from .agent import QLearningAgent
+from .behavior import BehaviorPolicy
+from .environment import make_environment, reached_goal
+
+
+@dataclass(frozen=True)
+class TrainingResult:
+    agent: QLearningAgent
+    rewards: tuple[float, ...]
+    steps: tuple[int, ...]
+    successes: tuple[bool, ...]
+    duration_seconds: float
+    best_snapshot: np.ndarray
+    periodic_snapshots: tuple[tuple[int, np.ndarray], ...]
+
+
+def _fixed_parameters(config: dict[str, Any]) -> dict[str, Any]:
+    parameters: dict[str, Any] = {}
+    for parameter_id, binding in config["effective_parameters"].items():
+        if binding["mode"] != "fixed":
+            raise ValueError(f"generated runtime cannot execute tunable parameter: {parameter_id}")
+        parameters[parameter_id] = binding["value"]
+    return parameters
+
+
+def train(
+    config: dict[str, Any],
+    progress: Callable[[dict[str, Any]], None] | None = None,
+) -> TrainingResult:
+    if config["training_budget_unit"] != "episodes":
+        raise ValueError("the generated Q-Learning runtime requires an episode budget")
+    parameters = _fixed_parameters(config)
+    seed = int(parameters["training.seed"])
+    environment = make_environment()
+    environment.action_space.seed(seed)
+    agent = QLearningAgent(
+        environment.observation_space.low,
+        environment.observation_space.high,
+        environment.action_space.n,
+        int(parameters["q_learning.bins_per_dimension"]),
+        float(parameters["q_learning.learning_rate"]),
+        float(parameters["training.gamma"]),
+        seed,
+    )
+    behavior = BehaviorPolicy(agent, environment.action_space, parameters, seed)
+    rewards: list[float] = []
+    steps: list[int] = []
+    successes: list[bool] = []
+    best_reward = float("-inf")
+    best_snapshot = agent.snapshot()
+    periodic_snapshots: list[tuple[int, np.ndarray]] = []
+    total_steps = 0
+    log_interval = int(parameters["training.log_interval"])
+    started = time.perf_counter()
+    try:
+        for episode in range(int(config["training_budget"])):
+            observation, _ = environment.reset(seed=seed + episode)
+            schedule_progress = episode / max(1, int(config["training_budget"]) - 1)
+            behavior.reset_episode(episode, schedule_progress)
+            episode_reward = 0.0
+            episode_steps = 0
+            success = False
+            while True:
+                action = behavior.select_action(observation, episode, schedule_progress)
+                next_observation, reward, terminated, truncated, _ = environment.step(action)
+                agent.update(observation, action, reward, next_observation, bool(terminated))
+                observation = next_observation
+                episode_reward += float(reward)
+                episode_steps += 1
+                total_steps += 1
+                if terminated or truncated:
+                    success = reached_goal(
+                        environment, observation, bool(terminated), episode_reward
+                    )
+                    break
+            rewards.append(episode_reward)
+            steps.append(episode_steps)
+            successes.append(success)
+            if episode_reward > best_reward:
+                best_reward = episode_reward
+                best_snapshot = agent.snapshot()
+            if (
+                config["checkpoint_policy"] == "periodic"
+                and (episode + 1) % int(config["checkpoint_interval"]) == 0
+            ):
+                periodic_snapshots.append((episode + 1, agent.snapshot()))
+            if progress is not None and (
+                (episode + 1) % log_interval == 0
+                or episode + 1 == int(config["training_budget"])
+            ):
+                progress({
+                    "episode": episode + 1,
+                    "reward": episode_reward,
+                    "steps": episode_steps,
+                    "total_steps": total_steps,
+                    "success": success,
+                    "elapsed_seconds": time.perf_counter() - started,
+                })
+    finally:
+        environment.close()
+    return TrainingResult(
+        agent=agent,
+        rewards=tuple(rewards),
+        steps=tuple(steps),
+        successes=tuple(successes),
+        duration_seconds=time.perf_counter() - started,
+        best_snapshot=best_snapshot,
+        periodic_snapshots=tuple(periodic_snapshots),
+    )

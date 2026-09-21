@@ -1,0 +1,22 @@
+"""Gymnasium Acrobot adapter."""
+
+from __future__ import annotations
+
+import gymnasium as gym
+import numpy as np
+
+
+GYMNASIUM_ID = "Acrobot-v1"
+
+
+def make_environment(render_mode: str | None = None):
+    return gym.make(GYMNASIUM_ID, render_mode=render_mode)
+
+
+def reached_goal(
+    environment,
+    observation: np.ndarray,
+    terminated: bool,
+    episode_reward: float,
+) -> bool:
+    return bool(terminated)

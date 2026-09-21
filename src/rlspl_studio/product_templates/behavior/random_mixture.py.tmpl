@@ -1,0 +1,40 @@
+"""Scheduled random-action mixture (epsilon-greedy for Q methods)."""
+
+from __future__ import annotations
+
+import numpy as np
+
+
+def _scheduled(parameters, step: int, progress: float) -> float:
+    start = float(parameters["behavior.random_mixture.probability_start"])
+    end = float(parameters["behavior.random_mixture.probability_end"])
+    schedule = parameters["behavior.random_mixture.schedule"]
+    if schedule == "constant":
+        value = start
+    elif schedule == "linear":
+        value = start + (end - start) * min(1.0, max(0.0, progress))
+    else:
+        value = max(end, start * float(parameters["behavior.random_mixture.decay"]) ** step)
+    return min(1.0, max(0.0, value))
+
+
+class BehaviorPolicy:
+    def __init__(self, agent, action_space, parameters, seed: int) -> None:
+        self.agent = agent
+        self.action_space = action_space
+        self.parameters = parameters
+        self.rng = np.random.default_rng(seed + 104729)
+
+    def reset_episode(self, episode: int = 0, progress: float = 0.0) -> None:
+        return None
+
+    def select_action(self, observation, step: int = 0, progress: float = 0.0):
+        probability = _scheduled(self.parameters, step, progress)
+        if self.rng.random() < probability:
+            sample = getattr(self.action_space, "sample", None)
+            if sample is not None:
+                return sample()
+            if hasattr(self.action_space, "n"):
+                return int(self.rng.integers(int(self.action_space.n)))
+            raise TypeError("random-action mixture requires a sampleable action space")
+        return self.agent.behavior_action(observation)

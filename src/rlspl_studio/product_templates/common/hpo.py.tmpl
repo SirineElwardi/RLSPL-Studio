@@ -1,0 +1,474 @@
+"""Self-contained random and Tree-structured Parzen Estimator search.
+
+The search engine changes only bindings declared as tunable. Trial status,
+sampled values, seed-level scores, and rankings are execution evidence rather
+than new product features.
+"""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import math
+import random
+import statistics
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable
+
+
+TrialExecutor = Callable[[dict[str, Any], Path, str, bool], dict[str, Any]]
+_STATE_FILE = "hpo-summary.json"
+_TRIALS_FILE = "hpo-trials.jsonl"
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as stream:
+        json.dump(payload, stream, indent=2, sort_keys=True, allow_nan=False)
+        stream.write("\n")
+    temporary.replace(path)
+
+
+def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
+    with path.open("a", encoding="utf-8") as stream:
+        json.dump(payload, stream, sort_keys=True, allow_nan=False)
+        stream.write("\n")
+
+
+def _stable_hash(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _resolved_configuration_hash(config: dict[str, Any]) -> str:
+    """Use the same canonical content shape as the Studio resolver."""
+
+    return _stable_hash({
+        "schema_version": config["schema_version"],
+        "name": config["name"],
+        "environment": {
+            "id": config["environment_id"],
+            "version": config["environment_version"],
+        },
+        "algorithm": {
+            "id": config["algorithm_id"],
+            "version": config["algorithm_version"],
+        },
+        "behavior": {
+            "id": config["behavior_id"],
+            "version": config["behavior_version"],
+        },
+        "optimizer": {
+            "id": config["optimizer_id"],
+            "version": config["optimizer_version"],
+        },
+        "training_budget_unit": config["training_budget_unit"],
+        "training_budget": config["training_budget"],
+        "checkpoint_policy": config["checkpoint_policy"],
+        "checkpoint_interval": config["checkpoint_interval"],
+        "effective_parameters": {
+            key: value for key, value in sorted(config["effective_parameters"].items())
+        },
+        "search": config.get("search"),
+        "evaluation": config["evaluation"],
+    })
+
+
+def _aggregate(values: list[float], method: str) -> float:
+    if not values:
+        raise ValueError("cannot aggregate an empty objective sample")
+    if method == "median":
+        return float(statistics.median(values))
+    if method == "iqm" and len(values) >= 4:
+        ordered = sorted(values)
+        trim = len(ordered) // 4
+        retained = ordered[trim:len(ordered) - trim]
+        return float(statistics.fmean(retained))
+    return float(statistics.fmean(values))
+
+
+def _random_value(domain: dict[str, Any], rng: random.Random) -> Any:
+    kind = domain["kind"]
+    if kind == "categorical":
+        return copy.deepcopy(rng.choice(list(domain["choices"])))
+    lower = domain["lower"]
+    upper = domain["upper"]
+    if kind == "integer":
+        return rng.randint(int(lower), int(upper))
+    if kind == "log_float":
+        return math.exp(rng.uniform(math.log(float(lower)), math.log(float(upper))))
+    return rng.uniform(float(lower), float(upper))
+
+
+def _gaussian_density(value: float, centers: list[float], bandwidth: float) -> float:
+    normalizer = bandwidth * math.sqrt(2.0 * math.pi)
+    density = sum(
+        math.exp(-0.5 * ((value - center) / bandwidth) ** 2) / normalizer
+        for center in centers
+    ) / max(1, len(centers))
+    return max(density, 1e-300)
+
+
+def _tpe_numeric_value(
+    parameter_id: str,
+    domain: dict[str, Any],
+    history: list[dict[str, Any]],
+    rng: random.Random,
+) -> Any:
+    logarithmic = domain["kind"] == "log_float"
+    transform = math.log if logarithmic else float
+    inverse = math.exp if logarithmic else float
+    lower = transform(float(domain["lower"]))
+    upper = transform(float(domain["upper"]))
+    ordered = sorted(history, key=lambda item: float(item["objective_value"]), reverse=True)
+    good_count = max(1, int(math.ceil(len(ordered) * 0.25)))
+    good = [transform(float(item["parameters"][parameter_id])) for item in ordered[:good_count]]
+    bad = [transform(float(item["parameters"][parameter_id])) for item in ordered[good_count:]]
+    if not bad:
+        bad = [lower, upper]
+    span = max(upper - lower, 1e-12)
+
+    def bandwidth(values: list[float]) -> float:
+        spread = statistics.pstdev(values) if len(values) > 1 else 0.0
+        return max(spread, span / (len(values) + 1), span * 0.03, 1e-12)
+
+    good_bandwidth = bandwidth(good)
+    bad_bandwidth = bandwidth(bad)
+    candidates: list[float] = []
+    for _ in range(32):
+        center = rng.choice(good)
+        candidates.append(min(upper, max(lower, rng.gauss(center, good_bandwidth))))
+    candidates.extend((rng.uniform(lower, upper), rng.choice(good)))
+    selected = max(
+        candidates,
+        key=lambda value: (
+            math.log(_gaussian_density(value, good, good_bandwidth))
+            - math.log(_gaussian_density(value, bad, bad_bandwidth))
+        ),
+    )
+    value = inverse(selected)
+    if domain["kind"] == "integer":
+        return min(int(domain["upper"]), max(int(domain["lower"]), int(round(value))))
+    return float(value)
+
+
+def _json_key(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _tpe_categorical_value(
+    parameter_id: str,
+    domain: dict[str, Any],
+    history: list[dict[str, Any]],
+    rng: random.Random,
+) -> Any:
+    ordered = sorted(history, key=lambda item: float(item["objective_value"]), reverse=True)
+    good_count = max(1, int(math.ceil(len(ordered) * 0.25)))
+    good = ordered[:good_count]
+    bad = ordered[good_count:]
+    choices = list(domain["choices"])
+    scores: list[float] = []
+    for choice in choices:
+        key = _json_key(choice)
+        good_frequency = 1.0 + sum(
+            _json_key(item["parameters"][parameter_id]) == key for item in good
+        )
+        bad_frequency = 1.0 + sum(
+            _json_key(item["parameters"][parameter_id]) == key for item in bad
+        )
+        scores.append((good_frequency / (len(good) + len(choices))) /
+                      (bad_frequency / (len(bad) + len(choices))))
+    total = sum(scores)
+    threshold = rng.random() * total
+    cumulative = 0.0
+    for choice, score in zip(choices, scores):
+        cumulative += score
+        if cumulative >= threshold:
+            return copy.deepcopy(choice)
+    return copy.deepcopy(choices[-1])
+
+
+def _suggest(
+    domains: dict[str, dict[str, Any]],
+    history: list[dict[str, Any]],
+    sampler: str,
+    rng: random.Random,
+) -> dict[str, Any]:
+    startup_trials = max(8, 2 * len(domains))
+    use_tpe = sampler == "bayesian_tpe" and len(history) >= startup_trials
+    parameters: dict[str, Any] = {}
+    for parameter_id, domain in sorted(domains.items()):
+        if not use_tpe:
+            parameters[parameter_id] = _random_value(domain, rng)
+        elif domain["kind"] == "categorical":
+            parameters[parameter_id] = _tpe_categorical_value(
+                parameter_id, domain, history, rng
+            )
+        else:
+            parameters[parameter_id] = _tpe_numeric_value(
+                parameter_id, domain, history, rng
+            )
+    return parameters
+
+
+def _materialize_config(
+    source: dict[str, Any],
+    sampled_parameters: dict[str, Any],
+    training_seed: int,
+    evaluation_seeds: list[int],
+    *,
+    trial_evaluation: bool = False,
+) -> dict[str, Any]:
+    candidate = copy.deepcopy(source)
+    for parameter_id, binding in candidate["effective_parameters"].items():
+        if binding["mode"] == "tunable":
+            binding.clear()
+            binding.update({
+                "mode": "fixed",
+                "value": sampled_parameters[parameter_id],
+                "domain": None,
+            })
+    candidate["effective_parameters"]["training.seed"] = {
+        "mode": "fixed",
+        "value": int(training_seed),
+        "domain": None,
+    }
+    candidate["search"] = None
+    candidate["evaluation"]["seeds"] = [int(seed) for seed in evaluation_seeds]
+    if trial_evaluation:
+        # HPO needs the declared objective, not expensive plots or replicated
+        # summaries inside each individual seed run. Replication is aggregated
+        # explicitly across search.seeds at the trial level.
+        candidate["evaluation"]["summaries"] = ["mean"]
+        candidate["evaluation"]["visualizations"] = []
+        candidate["evaluation"]["export_formats"] = ["json", "csv"]
+    candidate["configuration_hash"] = _resolved_configuration_hash(candidate)
+    return candidate
+
+
+def _history(trials: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    completed = [item for item in trials if item["status"] == "completed"]
+    points: list[dict[str, Any]] = []
+    best: float | None = None
+    for item in completed:
+        value = float(item["objective_value"])
+        best = value if best is None else max(best, value)
+        points.append({
+            "trial_number": item["trial_number"],
+            "objective_value": value,
+            "best_so_far": best,
+        })
+    return points
+
+
+def _state_payload(base: dict[str, Any], trials: list[dict[str, Any]]) -> dict[str, Any]:
+    completed = [item for item in trials if item["status"] == "completed"]
+    failed = [item for item in trials if item["status"] == "failed"]
+    running = next((item for item in reversed(trials) if item["status"] == "running"), None)
+    ordered = sorted(completed, key=lambda item: float(item["objective_value"]), reverse=True)
+    top_k = min(int(base["top_k"]), len(ordered))
+    payload = {
+        **base,
+        "completed_trials": len(completed),
+        "failed_trials": len(failed),
+        "running_trial": running["trial_number"] if running else None,
+        "completed_seed_runs": sum(len(item.get("seed_results", [])) for item in trials),
+        "trials": trials,
+        "history": _history(trials),
+        "top_trials": ordered[:top_k],
+        "best": ordered[0] if ordered else None,
+    }
+    return payload
+
+
+def run_search(
+    config: dict[str, Any],
+    output: Path,
+    execute_trial: TrialExecutor,
+) -> dict[str, Any]:
+    search = config.get("search")
+    if not isinstance(search, dict):
+        raise ValueError("HPO execution requires a search configuration")
+    domains = {
+        parameter_id: copy.deepcopy(binding["domain"])
+        for parameter_id, binding in config["effective_parameters"].items()
+        if binding["mode"] == "tunable"
+    }
+    if not domains:
+        raise ValueError("HPO execution requires at least one tunable parameter")
+    if search["sampler"] not in {"random", "bayesian_tpe"}:
+        raise ValueError(f"generated HPO runtime does not implement {search['sampler']!r}")
+
+    seeds = [int(seed) for seed in search["seeds"]]
+    trial_limit = search.get("trials")
+    timeout_seconds = search.get("timeout_seconds")
+    top_k = int(search.get("top_k", 5))
+    started_at = _now()
+    started_clock = time.monotonic()
+    rng = random.Random(int(search.get("sampler_seed", 0)))
+    trial_root = output / "hpo-trials"
+    trial_root.mkdir(parents=True, exist_ok=False)
+    base_state = {
+        "schema_version": "1.0",
+        "execution_mode": "hpo",
+        "status": "running",
+        "phase": "search",
+        "sampler": search["sampler"],
+        "provider_id": (
+            "core.random" if search["sampler"] == "random" else "core.bayesian_tpe"
+        ),
+        "objective": search["objective"],
+        "direction": "maximize",
+        "aggregation": search.get("aggregation", "mean"),
+        "trial_budget": trial_limit,
+        "timeout_seconds": timeout_seconds,
+        "search_seeds": seeds,
+        "sampler_seed": int(search.get("sampler_seed", 0)),
+        "top_k": top_k,
+        "search_space": domains,
+        "planned_seed_runs": int(trial_limit) * len(seeds) if trial_limit else None,
+        "started_at": started_at,
+        "ended_at": None,
+        "final_evaluation_metrics": None,
+        "error": None,
+    }
+    trials: list[dict[str, Any]] = []
+    _atomic_json(output / _STATE_FILE, _state_payload(base_state, trials))
+
+    trial_number = 0
+    while trial_limit is None or trial_number < int(trial_limit):
+        elapsed = time.monotonic() - started_clock
+        if timeout_seconds is not None and elapsed >= float(timeout_seconds):
+            break
+        completed_history = [item for item in trials if item["status"] == "completed"]
+        parameters = _suggest(domains, completed_history, search["sampler"], rng)
+        trial_started = time.monotonic()
+        record: dict[str, Any] = {
+            "trial_number": trial_number,
+            "status": "running",
+            "parameters": parameters,
+            "objective_value": None,
+            "seed_results": [],
+            "duration_seconds": None,
+            "error": None,
+        }
+        trials.append(record)
+        _atomic_json(output / _STATE_FILE, _state_payload(base_state, trials))
+        trial_directory = trial_root / f"trial-{trial_number:04d}"
+        trial_directory.mkdir()
+        try:
+            objective_values: list[float] = []
+            for seed in seeds:
+                seed_directory = trial_directory / f"seed-{seed}"
+                seed_directory.mkdir()
+                candidate = _materialize_config(
+                    config,
+                    parameters,
+                    seed,
+                    [seed],
+                    trial_evaluation=True,
+                )
+                result = execute_trial(
+                    candidate,
+                    seed_directory,
+                    f"trial-{trial_number:04d}-seed-{seed}",
+                    False,
+                )
+                metrics = result.get("metrics", {})
+                objective_value = float(metrics[search["objective"]])
+                if not math.isfinite(objective_value):
+                    raise ValueError("trial objective is not finite")
+                objective_values.append(objective_value)
+                record["seed_results"].append({
+                    "seed": seed,
+                    "objective_value": objective_value,
+                    "metrics": metrics,
+                    "artifact_path": seed_directory.relative_to(output).as_posix(),
+                })
+                _atomic_json(output / _STATE_FILE, _state_payload(base_state, trials))
+            record["objective_value"] = _aggregate(
+                objective_values, search.get("aggregation", "mean")
+            )
+            record["status"] = "completed"
+        except Exception as exc:
+            record["status"] = "failed"
+            record["error"] = f"{type(exc).__name__}: {exc}"
+        record["duration_seconds"] = time.monotonic() - trial_started
+        _append_jsonl(output / _TRIALS_FILE, record)
+        _atomic_json(output / _STATE_FILE, _state_payload(base_state, trials))
+        trial_number += 1
+
+    completed = [item for item in trials if item["status"] == "completed"]
+    if not completed:
+        failed_state = {
+            **base_state,
+            "status": "failed",
+            "phase": "search",
+            "ended_at": _now(),
+            "error": "no HPO trial completed successfully",
+        }
+        _atomic_json(output / _STATE_FILE, _state_payload(failed_state, trials))
+        raise ValueError("no HPO trial completed successfully")
+
+    best = max(completed, key=lambda item: float(item["objective_value"]))
+    seed_binding = config["effective_parameters"].get("training.seed", {})
+    final_training_seed = int(seed_binding.get("value", 0))
+    final_config = _materialize_config(
+        config,
+        best["parameters"],
+        final_training_seed,
+        list(config["evaluation"]["seeds"]),
+    )
+    _atomic_json(output / "best-configuration.json", final_config)
+    finalizing_state = {
+        **base_state,
+        "status": "running",
+        "phase": "final_fit",
+    }
+    summary = _state_payload(finalizing_state, trials)
+    _atomic_json(output / _STATE_FILE, summary)
+    return {"configuration": final_config, "summary": summary}
+
+
+def complete_search(output: Path, final_metrics: dict[str, Any]) -> dict[str, Any]:
+    path = output / _STATE_FILE
+    with path.open("r", encoding="utf-8") as stream:
+        summary = json.load(stream)
+    summary.update({
+        "status": "completed",
+        "phase": "completed",
+        "ended_at": _now(),
+        "final_evaluation_metrics": final_metrics,
+        "error": None,
+    })
+    _atomic_json(path, summary)
+    return summary
+
+
+def fail_search(output: Path, error: Exception) -> None:
+    path = output / _STATE_FILE
+    if not path.is_file():
+        return
+    try:
+        with path.open("r", encoding="utf-8") as stream:
+            summary = json.load(stream)
+        summary.update({
+            "status": "failed",
+            "ended_at": _now(),
+            "error": f"{type(error).__name__}: {error}",
+        })
+        _atomic_json(path, summary)
+    except (OSError, ValueError, TypeError):
+        return

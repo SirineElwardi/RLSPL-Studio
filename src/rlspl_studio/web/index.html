@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RLSPL Studio</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-mark" aria-hidden="true">RL</div>
+    <div>
+      <p class="eyebrow">Software Product Line</p>
+      <h1>RLSPL Studio</h1>
+    </div>
+    <nav class="mode-switch" aria-label="Studio workspace">
+      <button id="product-mode-button" class="mode-button active" type="button">Configure</button>
+      <button id="study-mode-button" class="mode-button" type="button">Explore</button>
+      <button id="spl-mode-button" class="mode-button" type="button">SPL model</button>
+      <button id="monitor-mode-button" class="mode-button" type="button">Monitor</button>
+    </nav>
+    <div class="topbar-actions">
+      <button id="learning-guide-button" class="button guide-button" type="button">Learning guide</button>
+      <span id="connection-status" class="status-chip pending">Loading catalog</span>
+      <span id="product-actions" class="action-group">
+        <button id="validate-button" class="button secondary" type="button">Validate</button>
+        <button id="generate-button" class="button primary" type="button">Generate product</button>
+      </span>
+      <span id="study-actions" class="action-group" hidden>
+        <button id="preview-study-button" class="button secondary" type="button">Preview study</button>
+        <button id="save-study-button" class="button primary" type="button">Save manifest</button>
+      </span>
+      <span id="spl-actions" class="action-group" hidden>
+        <button id="spl-refresh-button" class="button secondary" type="button">Trace current selection</button>
+      </span>
+      <span id="monitor-actions" class="action-group" hidden>
+        <label class="auto-refresh-label"><input id="monitor-auto-refresh" type="checkbox" checked><span>Auto-refresh</span></label>
+        <button id="refresh-monitor-button" class="button secondary" type="button">Refresh</button>
+      </span>
+    </div>
+  </header>
+
+  <main id="product-workspace" class="workspace">
+    <section class="editor" aria-label="Product configuration editor">
+      <div class="intro">
+        <div>
+          <p class="eyebrow">Configuration</p>
+          <h2>Compose a reinforcement-learning product</h2>
+          <p>Select components, understand their contracts, then let the resolver check the complete configuration.</p>
+        </div>
+        <label class="project-name">
+          <span>Project name</span>
+          <input id="project-name" value="mountain-car-q-learning" autocomplete="off">
+        </label>
+      </div>
+
+      <article class="axis-card" data-axis="01">
+        <div class="axis-heading">
+          <div><span class="axis-number">01</span><h3>Environment</h3></div>
+          <span class="axis-tag">Required</span>
+        </div>
+        <div class="catalog-field">
+          <label for="environment-select">Catalog environment</label>
+          <select id="environment-select"></select>
+        </div>
+        <div id="environment-capabilities" class="capability-row"></div>
+        <div id="environment-theory" class="theory-preview" aria-live="polite"></div>
+      </article>
+
+      <article class="axis-card" data-axis="02">
+        <div class="axis-heading">
+          <div><span class="axis-number">02</span><h3>Agent</h3></div>
+          <span class="axis-tag">Required</span>
+        </div>
+        <div class="catalog-field">
+          <label for="algorithm-select">Algorithm</label>
+          <select id="algorithm-select"></select>
+        </div>
+        <div id="algorithm-capabilities" class="capability-row"></div>
+        <div id="algorithm-theory" class="theory-preview" aria-live="polite"></div>
+      </article>
+
+      <article class="axis-card" data-axis="03">
+        <div class="axis-heading">
+          <div><span class="axis-number">03</span><h3>Action-selection behavior</h3></div>
+          <span class="axis-tag">Required · composable</span>
+        </div>
+        <div class="catalog-field">
+          <label for="behavior-select">Behavior strategy</label>
+          <select id="behavior-select"></select>
+        </div>
+        <p class="card-help">The algorithm learns values or a policy. This separate component decides how those outputs become training actions.</p>
+        <div id="behavior-capabilities" class="capability-row"></div>
+        <div id="behavior-theory" class="theory-preview" aria-live="polite"></div>
+      </article>
+
+      <article class="axis-card" data-axis="04">
+        <div class="axis-heading">
+          <div><span class="axis-number">04</span><h3>Optimizer / update rule</h3></div>
+          <span class="axis-tag">Required · composable</span>
+        </div>
+        <div class="catalog-field">
+          <label for="optimizer-select">Parameter-update strategy</label>
+          <select id="optimizer-select"></select>
+        </div>
+        <p class="card-help">The algorithm exposes an update interface. This component supplies either the direct tabular rule or a concrete neural-network gradient optimizer.</p>
+        <div id="optimizer-capabilities" class="capability-row"></div>
+        <div id="optimizer-theory" class="theory-preview" aria-live="polite"></div>
+      </article>
+
+      <article class="axis-card" data-axis="05">
+        <div class="axis-heading">
+          <div><span class="axis-number">05</span><h3>Training</h3></div>
+          <span class="axis-tag">Required</span>
+        </div>
+        <div class="concept-bar" aria-label="Training concepts">
+          <button type="button" data-theory-kind="concept" data-theory-id="budget_unit">Budget unit</button>
+          <button type="button" data-theory-kind="concept" data-theory-id="training_budget">Training budget</button>
+          <button type="button" data-theory-kind="concept" data-theory-id="checkpoint_policy">Checkpointing</button>
+        </div>
+        <div class="grid two">
+          <label>Budget unit
+            <select id="budget-unit"><option value="episodes">Episodes</option><option value="timesteps">Timesteps</option></select>
+          </label>
+          <label>Budget
+            <input id="budget" type="number" min="1" value="500">
+          </label>
+          <label>Checkpoint policy
+            <select id="checkpoint-policy"><option value="best">Best</option><option value="periodic">Periodic</option><option value="disabled">Disabled</option></select>
+          </label>
+          <label id="checkpoint-interval-label" hidden>Checkpoint interval
+            <input id="checkpoint-interval" type="number" min="1" value="100">
+          </label>
+        </div>
+        <div class="section-label">Parameters and variability</div>
+        <div id="parameter-editor" class="parameter-editor"></div>
+      </article>
+
+      <article class="axis-card optional" data-axis="06">
+        <div class="axis-heading">
+          <div><span class="axis-number">06</span><h3>Hyperparameter search</h3></div>
+          <div class="heading-actions">
+            <button class="learn-link" type="button" data-theory-kind="concept" data-theory-id="hpo">What is HPO?</button>
+            <label class="switch-label"><input id="search-enabled" type="checkbox"><span>Enable</span></label>
+          </div>
+        </div>
+        <div class="milestone-note hpo-ready-note"><strong>Executable search branch.</strong> Each proposal is trained with every trial seed, ranked by the aggregated objective, then the best parameter set is trained once more and evaluated on the separate evaluation seeds below.</div>
+        <div class="concept-bar" aria-label="Hyperparameter-search concepts">
+          <button type="button" data-theory-kind="concept" data-theory-id="sampler">Sampler</button>
+          <button type="button" data-theory-kind="concept" data-theory-id="objective">Objective</button>
+          <button type="button" data-theory-kind="concept" data-theory-id="trials">Trials</button>
+          <button type="button" data-theory-kind="concept" data-theory-id="search_seeds">Trial seeds</button>
+          <button type="button" data-theory-kind="concept" data-theory-id="aggregation">Aggregation</button>
+          <button type="button" data-theory-kind="concept" data-theory-id="sampler_seed">Sampler seed</button>
+          <button type="button" data-theory-kind="concept" data-theory-id="search_timeout">Timeout</button>
+          <button type="button" data-theory-kind="concept" data-theory-id="hpo_top_k">Top trials</button>
+        </div>
+        <div id="search-fields" class="grid two disabled-region">
+          <label>Sampler
+            <select id="search-sampler"><option value="random">Random</option><option value="bayesian_tpe">Bayesian TPE</option></select>
+          </label>
+          <label>Objective
+            <select id="search-objective"><option value="average_reward">Average reward</option><option value="cumulative_reward">Cumulative reward</option><option value="reward_auc">Reward AUC</option></select>
+          </label>
+          <label>Trials
+            <input id="search-trials" type="number" min="1" value="20">
+          </label>
+          <label>Trial training seeds
+            <input id="search-seeds" value="0, 1, 2">
+          </label>
+          <label>Seed aggregation
+            <select id="search-aggregation"><option value="mean">Mean</option><option value="median">Median</option><option value="iqm">Interquartile mean</option></select>
+          </label>
+          <label>Sampler seed
+            <input id="search-sampler-seed" type="number" value="0">
+          </label>
+          <label>Optional timeout (seconds)
+            <input id="search-timeout" type="number" min="1" placeholder="No timeout">
+          </label>
+          <label>Top trials on dashboard
+            <select id="search-top-k"><option value="3">3</option><option value="5" selected>5</option></select>
+          </label>
+        </div>
+        <p id="hpo-workload-note" class="evaluation-note">20 trials × 3 trial seeds = 60 trial training runs, followed by one final fit.</p>
+      </article>
+
+      <article class="axis-card" data-axis="07">
+        <div class="axis-heading">
+          <div><span class="axis-number">07</span><h3>Evaluation</h3></div>
+          <button class="learn-link" type="button" data-theory-kind="concept" data-theory-id="evaluation">Why evaluate separately?</button>
+        </div>
+        <div class="section-heading"><div class="section-label">Metrics</div><span>What should be measured?</span></div>
+        <div id="metrics" class="check-grid">
+          <label><input type="checkbox" value="average_reward" checked>Average reward</label>
+          <label><input type="checkbox" value="cumulative_reward">Cumulative reward</label>
+          <label><input type="checkbox" value="success_rate" checked>Success rate</label>
+          <label><input type="checkbox" value="reward_auc">Reward AUC</label>
+          <label><input type="checkbox" value="training_time">Training time</label>
+          <label><input type="checkbox" value="environment_steps">Environment steps</label>
+          <label><input type="checkbox" value="episodes_to_threshold">Episodes to threshold</label>
+        </div>
+        <p id="success-metric-note" class="evaluation-note" hidden>
+          This environment has no native binary success event. Use return-based metrics such as average reward; Studio does not manufacture a success threshold.
+        </p>
+        <div id="metric-theory-links" class="concept-bar compact-concepts" aria-label="Metric explanations"></div>
+        <div class="section-heading"><div class="section-label">Statistical summaries</div><button type="button" class="learn-link" data-theory-kind="concept" data-theory-id="summaries">Explain summaries</button></div>
+        <div id="summaries" class="check-grid">
+          <label><input type="checkbox" value="mean" checked>Mean</label>
+          <label><input type="checkbox" value="median">Median</label>
+          <label><input type="checkbox" value="standard_deviation" checked>Standard deviation</label>
+          <label><input type="checkbox" value="confidence_interval" checked>95% confidence interval</label>
+          <label><input type="checkbox" value="iqm">Interquartile mean</label>
+        </div>
+        <div class="section-heading"><div class="section-label">Visualizations and exports</div><span><button type="button" class="learn-link" data-theory-kind="concept" data-theory-id="visualizations">Plots</button> · <button type="button" class="learn-link" data-theory-kind="concept" data-theory-id="exports">Files</button></span></div>
+        <div class="grid two compact">
+          <div id="visualizations" class="check-grid">
+            <label><input type="checkbox" value="learning_curve" checked>Learning curve</label>
+            <label><input type="checkbox" value="reward_distribution" checked>Reward distribution</label>
+            <label><input type="checkbox" value="convergence">Convergence</label>
+          </div>
+          <div id="exports" class="check-grid">
+            <label><input type="checkbox" value="json" checked>JSON</label>
+            <label><input type="checkbox" value="csv" checked>CSV</label>
+            <label><input type="checkbox" value="png" checked>PNG</label>
+          </div>
+        </div>
+        <div class="grid two">
+          <label>Evaluation action mode
+            <select id="evaluation-action-mode"><option value="deterministic">Deterministic</option><option value="stochastic">Stochastic policy</option><option value="training_behavior">Reuse training behavior</option></select>
+          </label>
+          <label>Evaluation seeds
+            <input id="evaluation-seeds" value="100, 101, 102">
+          </label>
+          <label>Episodes per seed
+            <input id="episodes-per-seed" type="number" min="1" value="10">
+          </label>
+        </div>
+      </article>
+
+      <div class="metadata-note">
+        <strong>Execution is metadata.</strong>
+        Device, platform, timestamps, effective seeds, versions, and artifacts are recorded after execution—not selected as features.
+      </div>
+    </section>
+
+    <aside class="inspector">
+      <section class="inspector-card compatibility-card">
+        <p class="eyebrow">Capability check</p>
+        <div id="compatibility-status" class="compatibility-status pending">Choose components</div>
+        <p id="compatibility-detail"></p>
+      </section>
+      <section class="inspector-card composition-card">
+        <div class="inspector-heading"><h3>What this selection means</h3><span>Live explanation</span></div>
+        <div id="selection-commentary" class="selection-commentary"><p class="muted">Choose an environment and algorithm to inspect their composition.</p></div>
+      </section>
+      <section class="inspector-card">
+        <div class="inspector-heading"><h3>Validation</h3><span id="issue-count">Not run</span></div>
+        <div id="issues" class="issues"><p class="muted">Validate to inspect blocking errors and advisories.</p></div>
+      </section>
+      <section id="plugin-health" class="inspector-card" hidden>
+        <div class="inspector-heading"><h3>Plug-in health</h3><span id="plugin-issue-count"></span></div>
+        <div id="plugin-issues" class="issues"></div>
+      </section>
+      <section id="generation-result" class="inspector-card generation-card" hidden>
+        <div class="inspector-heading"><h3>Generated product</h3><button id="copy-run-button" type="button" class="text-button">Copy commands</button></div>
+        <p id="generation-path" class="generated-path"></p>
+        <pre id="run-commands" class="run-commands"></pre>
+      </section>
+      <section class="inspector-card preview-card">
+        <div class="inspector-heading"><h3>Configuration JSON</h3><button id="copy-button" type="button" class="text-button">Copy</button></div>
+        <pre id="json-preview"></pre>
+      </section>
+    </aside>
+  </main>
+
+  <main id="study-workspace" class="workspace" hidden>
+    <section class="editor" aria-label="Variability exploration study editor">
+      <div class="intro">
+        <div>
+          <p class="eyebrow">Exploration study</p>
+          <h2>Explore the valid configuration space</h2>
+          <p>Define finite variability axes. Every candidate is resolved independently and every exclusion keeps its explanation.</p>
+        </div>
+        <label class="project-name">
+          <span>Study name</span>
+          <input id="study-name" value="algorithm-environment-space" autocomplete="off">
+        </label>
+      </div>
+
+      <div class="study-learning-path" aria-label="Study terminology">
+        <p><strong>Read the plan from left to right:</strong> select components and values, expand candidates, resolve valid products, then repeat each product with seeds.</p>
+        <div class="concept-bar">
+          <button type="button" data-theory-kind="glossary" data-theory-id="explicit_selection">1 · Selections</button>
+          <button type="button" data-theory-kind="glossary" data-theory-id="candidate">2 · Candidates</button>
+          <button type="button" data-theory-kind="glossary" data-theory-id="valid_configuration">3 · Valid products</button>
+          <button type="button" data-theory-kind="glossary" data-theory-id="replication_seed">4 · Seeded runs</button>
+        </div>
+      </div>
+
+      <article class="axis-card" data-axis="S1">
+        <div class="axis-heading">
+          <div><span class="axis-number">S1</span><h3>Structural axes</h3></div>
+          <span class="axis-tag">Finite choices</span>
+        </div>
+        <p class="card-help">Select environments, algorithms, action behaviors, and optimizers. Their Cartesian product becomes the <button type="button" class="inline-theory" data-theory-kind="glossary" data-theory-id="structural_axis">candidate space</button>; capability constraints preserve every exclusion.</p>
+        <div class="section-label">Environments</div>
+        <div id="study-environments" class="check-grid selection-grid"></div>
+        <div class="section-label">Algorithms</div>
+        <div id="study-algorithms" class="check-grid selection-grid"></div>
+        <div id="study-algorithm-defaults" class="study-algorithm-defaults" aria-live="polite"></div>
+        <div class="section-label">Action-selection behaviors</div>
+        <div id="study-behaviors" class="check-grid selection-grid"></div>
+        <div class="section-label">Optimizers / update rules</div>
+        <div id="study-optimizers" class="check-grid selection-grid"></div>
+      </article>
+
+      <article class="axis-card" data-axis="S2">
+        <div class="axis-heading">
+          <div><span class="axis-number">S2</span><h3>Additional variability axes</h3></div>
+          <button id="add-study-axis-button" class="text-button" type="button">+ Add axis</button>
+        </div>
+        <p class="card-help">Set or vary training, evaluation, or component-owned parameters with comma-separated values. One value fixes that setting for the study; multiple values vary it. Component-owned values become <button type="button" class="inline-theory" data-theory-kind="glossary" data-theory-id="conditional_axis">conditional axes</button>.</p>
+        <div id="study-axis-list" class="study-axis-list">
+          <p id="empty-study-axes" class="empty-state">No additional settings. Catalog defaults will be resolved independently for every selected component composition.</p>
+        </div>
+      </article>
+
+      <article class="axis-card" data-axis="S3">
+        <div class="axis-heading">
+          <div><span class="axis-number">S3</span><h3>Replications and preview</h3></div>
+          <span class="axis-tag">Run plan</span>
+        </div>
+        <div class="grid two">
+          <label><span>Training replication seeds <button type="button" class="help-dot" aria-label="Explain training replication seeds" data-theory-kind="glossary" data-theory-id="replication_seed">?</button></span>
+            <input id="study-seeds" value="0, 1, 2">
+          </label>
+          <label><span>Evaluation seeds per trained agent <button type="button" class="help-dot" aria-label="Explain evaluation seeds" data-theory-kind="glossary" data-theory-id="evaluation_seed">?</button></span>
+            <input id="study-evaluation-seeds" value="100, 101, 102">
+          </label>
+          <label>Preview limit
+            <input id="study-limit" type="number" min="1" value="500">
+          </label>
+        </div>
+        <p id="study-seed-summary" class="seed-plan-note"></p>
+        <p class="card-help">Training seeds create repeated training runs. Evaluation seeds repeat the final policy evaluation inside each run; they do not create products or extra training runs. A <button type="button" class="inline-theory" data-theory-kind="glossary" data-theory-id="preview_limit">preview limit</button> controls browser work without rejecting a large theoretical space.</p>
+      </article>
+
+      <div class="metadata-note">
+        <strong>Independent study definition.</strong>
+        Unlisted settings use the Studio's documented study defaults and each active component's catalog defaults. Every effective value is materialized in the preview and frozen manifest. A study compares configurations; it does not select a winner.
+        <span id="study-default-summary" class="study-default-summary"></span>
+      </div>
+    </section>
+
+    <aside class="inspector study-inspector">
+      <section class="inspector-card study-summary-card">
+        <p class="eyebrow">Study plan</p>
+        <div id="study-status" class="compatibility-status pending">Preview not run</div>
+        <div class="summary-grid">
+          <div><strong id="candidate-count">—</strong><span>Candidates</span></div>
+          <div><strong id="configuration-count">—</strong><span>Valid unique</span></div>
+          <div><strong id="invalid-count">—</strong><span>Invalid</span></div>
+          <div><strong id="run-count">—</strong><span>Planned runs</span></div>
+        </div>
+        <div id="study-run-formula" class="run-formula">valid configurations × seeds = planned runs</div>
+        <p id="study-summary-detail" class="muted">Define axes and preview the study.</p>
+      </section>
+
+      <section id="study-save-result" class="inspector-card generation-card" hidden>
+        <div class="inspector-heading"><h3>Frozen manifest <button type="button" class="help-dot" aria-label="Explain frozen manifest" data-theory-kind="glossary" data-theory-id="frozen_manifest">?</button></h3><button id="copy-study-run-button" type="button" class="text-button">Copy run command</button></div>
+        <p id="study-manifest-path" class="generated-path"></p>
+        <pre id="study-run-command" class="run-commands"></pre>
+      </section>
+
+      <section class="inspector-card result-table-card">
+        <div class="inspector-heading"><h3>Valid configurations</h3><span id="variant-count">Not planned</span></div>
+        <div class="table-scroll">
+          <table class="variant-table">
+            <thead><tr><th>ID</th><th>Environment</th><th>Algorithm</th><th>Behavior</th><th>Optimizer</th><th>Axis values</th></tr></thead>
+            <tbody id="variant-rows"><tr><td colspan="6" class="muted">Preview the study to populate this matrix.</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="inspector-card">
+        <div class="inspector-heading"><h3>Excluded candidates <button type="button" class="help-dot" aria-label="Explain excluded candidates" data-theory-kind="glossary" data-theory-id="excluded_candidate">?</button></h3><span id="rejected-count">Not planned</span></div>
+        <div id="study-issues" class="issues"><p class="muted">Constraint violations will be preserved here.</p></div>
+      </section>
+
+      <section class="inspector-card preview-card">
+        <div class="inspector-heading"><h3>Study JSON</h3><button id="copy-study-button" type="button" class="text-button">Copy</button></div>
+        <pre id="study-json-preview"></pre>
+      </section>
+    </aside>
+  </main>
+
+  <main id="spl-workspace" class="spl-workspace" hidden>
+    <section class="spl-hero inspector-card">
+      <div>
+        <p class="eyebrow">Software Product Line lens</p>
+        <h2>See how RLSPL derives a product family</h2>
+        <p>The model separates common features, variation points, cross-tree constraints, reusable assets, and execution metadata. The highlighted nodes trace the current Configure selection.</p>
+      </div>
+      <div id="spl-selected-status" class="spl-selection-status pending">Waiting for trace</div>
+    </section>
+
+    <section class="spl-stat-grid" aria-label="Product line statistics">
+      <article class="inspector-card"><strong id="spl-feature-count">—</strong><span>modeled features</span></article>
+      <article class="inspector-card"><strong id="spl-constraint-count">—</strong><span>explicit constraints</span></article>
+      <article class="inspector-card"><strong id="spl-pairing-count">—</strong><span>valid env × algorithm × behavior × optimizer products</span></article>
+      <article class="inspector-card"><strong>0</strong><span>execution fields in feature tree</span></article>
+    </section>
+
+    <section class="inspector-card spl-flow-card">
+      <div class="inspector-heading">
+        <div><p class="eyebrow">Two SPL activities</p><h3>From domain engineering to product derivation</h3></div>
+        <span>Shared platform → concrete product</span>
+      </div>
+      <div id="spl-engineering-flow" class="spl-engineering-flow"></div>
+    </section>
+
+    <section class="spl-model-layout">
+      <article class="inspector-card spl-tree-card">
+        <div class="inspector-heading">
+          <div><p class="eyebrow">Variability model</p><h3>Revised RLSPL feature model</h3></div>
+          <span>Current selection highlighted</span>
+        </div>
+        <p class="card-help">Parent-child relations express the feature hierarchy. XOR and OR groups express cardinality; dependencies across branches are listed separately below.</p>
+        <div id="spl-feature-tree" class="spl-feature-tree"></div>
+      </article>
+
+      <aside class="spl-model-sidebar">
+        <section class="inspector-card">
+          <div class="inspector-heading"><h3>Notation</h3><span>Feature relations</span></div>
+          <div id="spl-legend" class="spl-legend"></div>
+        </section>
+        <section class="inspector-card">
+          <div class="inspector-heading"><h3>Selected product</h3><span>Application engineering</span></div>
+          <div id="spl-selection-summary" class="spl-selection-summary"><p class="muted">Trace the Configure selection to populate this view.</p></div>
+        </section>
+        <section class="inspector-card">
+          <div class="inspector-heading"><h3>Derivation trace</h3><span>Traceability</span></div>
+          <div id="spl-derivation-trace" class="spl-derivation-trace"></div>
+        </section>
+        <section class="metadata-note spl-metadata-note">
+          <strong>Outside the feature model</strong>
+          Execution status, device, platform, timestamps, attempts, seeds, and produced artifacts are provenance metadata. They describe a run; they do not define another product.
+        </section>
+      </aside>
+    </section>
+
+    <section class="inspector-card spl-pairing-card">
+      <div class="inspector-heading">
+        <div><p class="eyebrow">Cross-tree exclusions</p><h3>Environment × algorithm capability matrix</h3></div>
+        <span>✓ composable · × excluded</span>
+      </div>
+      <p class="card-help">The feature tree permits one environment and one algorithm. Capability constraints then remove pairings whose action, observation, or bound contracts disagree. The outlined cell is the current Configure selection.</p>
+      <div id="spl-pairing-matrix" class="table-scroll spl-pairing-scroll"></div>
+    </section>
+
+    <section class="inspector-card spl-pairing-card">
+      <div class="inspector-heading">
+        <div><p class="eyebrow">Behavior-policy contracts</p><h3>Algorithm × action-behavior matrix</h3></div>
+        <span>✓ composable · × excluded</span>
+      </div>
+      <p class="card-help">Compatibility follows exposed interfaces—Q-values, deterministic actors, or stochastic policies—plus action kind and perturbability. It is not a hard-coded algorithm whitelist.</p>
+      <div id="spl-behavior-matrix" class="table-scroll spl-pairing-scroll"></div>
+    </section>
+
+    <section class="inspector-card spl-pairing-card">
+      <div class="inspector-heading">
+        <div><p class="eyebrow">Update contracts</p><h3>Algorithm × optimizer matrix</h3></div>
+        <span>✓ composable · × excluded</span>
+      </div>
+      <p class="card-help">Tabular Q-Learning exposes a direct-update interface. Deep algorithms expose differentiable PyTorch parameters, allowing Adam, RMSprop, or SGD without algorithm-specific whitelists.</p>
+      <div id="spl-optimizer-matrix" class="table-scroll spl-pairing-scroll"></div>
+    </section>
+
+    <section class="inspector-card spl-constraints-card">
+      <div class="inspector-heading spl-constraint-heading">
+        <div><p class="eyebrow">Validity model</p><h3>Cross-tree and semantic constraints</h3></div>
+        <label>Show
+          <select id="spl-constraint-filter">
+            <option value="all">All constraints</option>
+            <option value="violated">Violated</option>
+            <option value="satisfied">Satisfied</option>
+            <option value="not_applicable">Not applicable</option>
+            <option value="feature_model">Feature-model rules</option>
+            <option value="capability">Capability rules</option>
+            <option value="parameter">Parameter rules</option>
+            <option value="search">Search rules</option>
+            <option value="evaluation">Evaluation rules</option>
+            <option value="availability">Availability rules</option>
+          </select>
+        </label>
+      </div>
+      <div id="spl-constraint-summary" class="constraint-summary"></div>
+      <div class="table-scroll spl-constraint-scroll">
+        <table class="variant-table spl-constraint-table">
+          <thead><tr><th>Status</th><th>ID and relation</th><th>Formal rule</th><th>Meaning and enforcement</th></tr></thead>
+          <tbody id="spl-constraint-rows"><tr><td colspan="4" class="muted">Trace a configuration to evaluate the constraints.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="spl-evidence-layout">
+      <article class="inspector-card">
+        <div class="inspector-heading"><div><p class="eyebrow">Model evolution</p><h3>Paper-to-Studio alignment</h3></div><span>Explicit differences</span></div>
+        <div id="spl-paper-alignment" class="spl-paper-alignment"></div>
+      </article>
+      <article class="inspector-card">
+        <div class="inspector-heading"><div><p class="eyebrow">Academic basis</p><h3>Feature-model foundations</h3></div><span>Primary sources</span></div>
+        <div id="spl-sources" class="spl-sources"></div>
+      </article>
+    </section>
+  </main>
+
+  <main id="monitor-workspace" class="monitor-workspace" hidden>
+    <section class="monitor-intro">
+      <div>
+        <p class="eyebrow">Execution observatory</p>
+        <h2>Monitor agents without changing them</h2>
+        <p>Inspect every generated product and study run, then see exactly which components and hyperparameters vary.</p>
+      </div>
+      <div class="metadata-chip"><strong>Read only</strong><span>Execution remains metadata</span></div>
+    </section>
+
+    <section class="monitor-layout">
+      <aside class="monitor-sidebar inspector-card">
+        <div class="inspector-heading"><h3>Products &amp; studies</h3><span id="monitor-execution-count">0 found</span></div>
+        <p class="card-help">Generated products appear immediately; their local runs and all <code>study-runs</code> executions are discovered automatically.</p>
+        <div id="monitor-execution-list" class="monitor-execution-list">
+          <p class="empty-state">No execution workspaces found.</p>
+        </div>
+      </aside>
+
+      <section class="monitor-main">
+        <div id="monitor-empty" class="monitor-empty inspector-card">
+          <div class="empty-monitor-icon" aria-hidden="true">↗</div>
+          <h3>No product or study selected</h3>
+          <p>Generate a product or execute a saved study, then refresh this workspace.</p>
+        </div>
+
+        <div id="monitor-dashboard" class="monitor-dashboard" hidden>
+          <section class="monitor-hero inspector-card">
+            <div class="monitor-title-row">
+              <div><p id="monitor-kind-label" class="eyebrow">Selected execution</p><h2 id="monitor-study-name">—</h2></div>
+              <span id="monitor-study-status" class="run-status pending">Pending</span>
+            </div>
+            <p id="monitor-study-meta" class="muted">—</p>
+            <p id="monitor-lifecycle-note" class="monitor-lifecycle-note" hidden></p>
+            <div class="monitor-progress-track" aria-label="Execution progress"><span id="monitor-progress-fill"></span></div>
+            <div id="monitor-summary-grid" class="monitor-summary-grid"></div>
+          </section>
+
+          <section class="inspector-card monitor-guide-card">
+            <div><p class="theory-label">How to read this dashboard</p><p>Status answers what the runner is doing; reward traces show learning evidence; comparisons aggregate only completed seeds.</p></div>
+            <button type="button" class="learn-link" data-theory-kind="concept" data-theory-id="monitoring_dashboard">Open monitoring guide →</button>
+          </section>
+
+          <section id="monitor-study-summary" class="inspector-card study-summary-card" hidden>
+            <div class="study-summary-heading">
+              <div><p class="eyebrow">Post-study synthesis</p><h3>Study summary</h3><p id="monitor-study-summary-message" class="card-help">The summary appears when execution stops.</p></div>
+              <span id="monitor-study-summary-status" class="run-status pending">Pending</span>
+            </div>
+            <div id="monitor-study-summary-facts" class="study-summary-facts"></div>
+            <div id="monitor-study-summary-components" class="study-summary-components"></div>
+            <div id="monitor-study-summary-environments" class="study-summary-environments"></div>
+            <p id="monitor-study-summary-note" class="study-summary-note"></p>
+          </section>
+
+          <section id="monitor-hpo-dashboard" class="inspector-card hpo-dashboard-card" hidden>
+            <div class="hpo-dashboard-heading">
+              <div><p class="eyebrow">Optimization evidence</p><h3>Hyperparameter search</h3><p id="monitor-hpo-meta" class="card-help">Select an HPO run to inspect its trials.</p></div>
+              <div class="hpo-heading-actions"><span id="monitor-hpo-status" class="run-status pending">Pending</span><button type="button" class="learn-link" data-theory-kind="concept" data-theory-id="hpo_dashboard">How to read HPO →</button></div>
+            </div>
+            <div class="monitor-progress-track hpo-progress-track" aria-label="HPO trial progress"><span id="monitor-hpo-progress-fill"></span></div>
+            <div id="monitor-hpo-summary" class="monitor-summary-grid"></div>
+            <div id="monitor-hpo-success-context"></div>
+            <div class="hpo-evidence-grid">
+              <section class="hpo-evidence-panel">
+                <div class="detail-section-heading"><h4>Objective history</h4><span>Trial score + best so far</span></div>
+                <div id="monitor-hpo-history" class="hpo-history-chart"></div>
+              </section>
+              <section class="hpo-evidence-panel">
+                <div class="detail-section-heading"><h4>Current best</h4><span id="monitor-hpo-best-label">No completed trial</span></div>
+                <div id="monitor-hpo-best" class="hpo-best-parameters"></div>
+              </section>
+            </div>
+            <section class="hpo-evidence-panel hpo-space-panel">
+              <div class="detail-section-heading"><h4>Declared search space</h4><span>Only tunable bindings vary</span></div>
+              <div id="monitor-hpo-space" class="hpo-search-space"></div>
+            </section>
+            <section class="hpo-evidence-panel">
+              <div class="detail-section-heading"><h4>Leading trials</h4><span id="monitor-hpo-trial-count">0 completed</span></div>
+              <div class="table-scroll hpo-table-scroll">
+                <table class="variant-table hpo-trial-table">
+                  <thead><tr><th>Rank</th><th>Trial</th><th>Objective</th><th>Seed scores</th><th>Duration</th><th>Parameters</th></tr></thead>
+                  <tbody id="monitor-hpo-trials"><tr><td colspan="6" class="muted">Trial evidence will appear while search runs.</td></tr></tbody>
+                </table>
+              </div>
+            </section>
+            <details id="monitor-hpo-failures" class="hpo-failure-panel" hidden>
+              <summary><span>Failed trial evidence</span><strong id="monitor-hpo-failure-count">0 failed</strong></summary>
+              <div id="monitor-hpo-failure-list" class="hpo-failure-list"></div>
+            </details>
+            <section class="hpo-final-evaluation">
+              <div><span>Final evaluation</span><strong id="monitor-hpo-final-status">Waiting for the selected configuration</strong></div>
+              <div id="monitor-hpo-final-metrics" class="hpo-final-metrics"></div>
+            </section>
+          </section>
+
+          <section class="inspector-card variability-card">
+            <div class="inspector-heading"><h3>Variability map</h3><span id="monitor-dimension-count">0 changing settings</span></div>
+            <p class="card-help">Derived from resolved configurations, including component defaults. Replication seeds remain execution metadata and are not counted as product variability.</p>
+            <div id="monitor-variability-map" class="variability-map"></div>
+          </section>
+
+          <section class="inspector-card">
+            <div class="inspector-heading"><h3>Runs</h3><span id="monitor-visible-run-count">0 shown</span></div>
+            <div class="monitor-filters">
+              <label>Status<select id="monitor-status-filter"><option value="all">All statuses</option><option value="generated">Generated</option><option value="running">Running</option><option value="pending">Pending</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="interrupted">Interrupted</option></select></label>
+              <label>Algorithm<select id="monitor-algorithm-filter"><option value="all">All algorithms</option></select></label>
+              <label>Behavior<select id="monitor-behavior-filter"><option value="all">All behaviors</option></select></label>
+              <label>Optimizer<select id="monitor-optimizer-filter"><option value="all">All optimizers</option></select></label>
+              <label>Search<input id="monitor-run-search" type="search" placeholder="Run, configuration, environment…"></label>
+            </div>
+            <div class="table-scroll monitor-run-scroll">
+              <table class="variant-table monitor-run-table">
+                <thead><tr><th>Status</th><th>Configuration</th><th>Agent</th><th>Varied settings</th><th>Seed</th><th>Training</th><th>Latest reward + success signal</th></tr></thead>
+                <tbody id="monitor-run-rows"><tr><td colspan="7" class="muted">Select a product or study.</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="inspector-card">
+            <div class="inspector-heading"><h3>Configuration comparison</h3><span>Resolved values + completed runs</span></div>
+            <p class="card-help">The varied-settings column shows the exact value in each resolved product. Metrics are means across completed runs only; missing metrics are never converted to zero. Reward values are paired with each environment's own success semantics.</p>
+            <div class="table-scroll comparison-scroll">
+              <table class="variant-table monitor-comparison-table">
+                <thead><tr><th>Configuration</th><th>Composition</th><th>Varied settings</th><th>Runs</th><th>Average reward + signal</th><th>Success rate</th></tr></thead>
+                <tbody id="monitor-comparison-rows"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <aside id="monitor-run-detail" class="monitor-detail inspector-card">
+        <div class="empty-detail"><h3>Run details</h3><p>Select a run to inspect its reward curve, metrics, configuration, artifacts, and process log.</p></div>
+      </aside>
+    </section>
+  </main>
+
+  <dialog id="learning-dialog" class="learning-dialog" aria-labelledby="learning-title">
+    <div class="learning-dialog-header">
+      <div><p id="learning-kicker" class="eyebrow">Learning guide</p><h2 id="learning-title">RLSPL concepts</h2></div>
+      <button id="close-learning-dialog" class="dialog-close" type="button" aria-label="Close learning guide">×</button>
+    </div>
+    <div id="learning-dialog-body" class="learning-dialog-body"></div>
+    <div id="learning-dialog-sources" class="learning-sources"></div>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,162 @@
+"""Deep Q-Network agent with replay memory and a target network."""
+
+from __future__ import annotations
+
+import copy
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import torch
+from torch import nn
+from torch.nn import functional as F
+
+from .optimizer import make_optimizer
+
+
+class QNetwork(nn.Module):
+    def __init__(self, observation_dimension: int, action_count: int, hidden_dimension: int) -> None:
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(observation_dimension, hidden_dimension),
+            nn.ReLU(),
+            nn.Linear(hidden_dimension, hidden_dimension),
+            nn.ReLU(),
+            nn.Linear(hidden_dimension, action_count),
+        )
+
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        return self.layers(observations)
+
+
+class DQNAgent:
+    def __init__(
+        self,
+        observation_dimension: int,
+        action_count: int,
+        hidden_dimension: int,
+        learning_rate: float,
+        gamma: float,
+        seed: int,
+        parameters: dict[str, Any] | None = None,
+    ) -> None:
+        self.observation_dimension = int(observation_dimension)
+        self.action_count = int(action_count)
+        self.hidden_dimension = int(hidden_dimension)
+        self.gamma = float(gamma)
+        self.rng = np.random.default_rng(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        torch.use_deterministic_algorithms(True, warn_only=True)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.online_network = QNetwork(
+            self.observation_dimension, self.action_count, self.hidden_dimension
+        ).to(self.device)
+        self.target_network = QNetwork(
+            self.observation_dimension, self.action_count, self.hidden_dimension
+        ).to(self.device)
+        self.target_network.load_state_dict(self.online_network.state_dict())
+        self.target_network.eval()
+        self.optimizer = make_optimizer(
+            parameters or {},
+            self.online_network.parameters(),
+            float(learning_rate),
+            "q_network",
+        )
+        self.perturbed_network: QNetwork | None = None
+
+    def _scores_from_network(
+        self, observation: np.ndarray, network: QNetwork
+    ) -> np.ndarray:
+        tensor = torch.as_tensor(
+            np.asarray(observation, dtype=np.float32).reshape(1, -1),
+            device=self.device,
+        )
+        with torch.no_grad():
+            values = network(tensor)
+        return values.cpu().numpy()[0]
+
+    def action_scores(self, observation: np.ndarray) -> np.ndarray:
+        return self._scores_from_network(observation, self.online_network)
+
+    def deterministic_action(self, observation: np.ndarray) -> int:
+        return int(np.argmax(self.action_scores(observation)))
+
+    def behavior_action(self, observation: np.ndarray) -> int:
+        return self.deterministic_action(observation)
+
+    def reset_parameter_noise(self, sigma: float, rng: np.random.Generator) -> None:
+        self.perturbed_network = copy.deepcopy(self.online_network).to(self.device)
+        self.perturbed_network.eval()
+        with torch.no_grad():
+            for parameter in self.perturbed_network.parameters():
+                noise = rng.normal(0.0, float(sigma), tuple(parameter.shape))
+                parameter.add_(torch.as_tensor(noise, dtype=parameter.dtype, device=self.device))
+
+    def perturbed_action(self, observation: np.ndarray) -> int:
+        if self.perturbed_network is None:
+            raise RuntimeError("parameter-noise behavior was not reset for this episode")
+        return int(np.argmax(self._scores_from_network(observation, self.perturbed_network)))
+
+    def select_action(self, observation: np.ndarray, epsilon: float = 0.0) -> int:
+        """Backward-compatible facade; generated training uses BehaviorPolicy."""
+        if self.rng.random() < epsilon:
+            return int(self.rng.integers(self.action_count))
+        return self.deterministic_action(observation)
+
+    def learn(
+        self,
+        observations: np.ndarray,
+        actions: np.ndarray,
+        rewards: np.ndarray,
+        next_observations: np.ndarray,
+        terminated: np.ndarray,
+    ) -> float:
+        states = torch.as_tensor(observations, dtype=torch.float32, device=self.device)
+        action_tensor = torch.as_tensor(actions, dtype=torch.int64, device=self.device).unsqueeze(1)
+        reward_tensor = torch.as_tensor(rewards, dtype=torch.float32, device=self.device).unsqueeze(1)
+        next_states = torch.as_tensor(next_observations, dtype=torch.float32, device=self.device)
+        terminal_tensor = torch.as_tensor(
+            terminated, dtype=torch.float32, device=self.device
+        ).unsqueeze(1)
+
+        predicted = self.online_network(states).gather(1, action_tensor)
+        with torch.no_grad():
+            next_values = self.target_network(next_states).max(dim=1, keepdim=True).values
+            target = reward_tensor + self.gamma * (1.0 - terminal_tensor) * next_values
+        loss = F.smooth_l1_loss(predicted, target)
+        self.optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        nn.utils.clip_grad_norm_(self.online_network.parameters(), max_norm=10.0)
+        self.optimizer.step()
+        return float(loss.item())
+
+    def synchronize_target(self) -> None:
+        self.target_network.load_state_dict(self.online_network.state_dict())
+
+    def save(self, path: Path) -> None:
+        torch.save(
+            {
+                "online_network": self.online_network.state_dict(),
+                "target_network": self.target_network.state_dict(),
+                "optimizer": self.optimizer.state_dict(),
+                "observation_dimension": self.observation_dimension,
+                "action_count": self.action_count,
+                "hidden_dimension": self.hidden_dimension,
+                "gamma": self.gamma,
+            },
+            path,
+        )
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "online_network": copy.deepcopy(self.online_network.state_dict()),
+            "target_network": copy.deepcopy(self.target_network.state_dict()),
+            "optimizer": copy.deepcopy(self.optimizer.state_dict()),
+        }
+
+    def restore(self, snapshot: dict[str, Any]) -> None:
+        self.online_network.load_state_dict(snapshot["online_network"])
+        self.target_network.load_state_dict(snapshot["target_network"])
+        self.optimizer.load_state_dict(snapshot["optimizer"])

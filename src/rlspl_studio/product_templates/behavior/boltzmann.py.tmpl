@@ -1,0 +1,36 @@
+"""Boltzmann sampling over discrete action scores."""
+
+from __future__ import annotations
+
+import numpy as np
+
+
+def _temperature(parameters, step: int, progress: float) -> float:
+    start = float(parameters["behavior.boltzmann.temperature_start"])
+    end = float(parameters["behavior.boltzmann.temperature_end"])
+    schedule = parameters["behavior.boltzmann.schedule"]
+    if schedule == "constant":
+        value = start
+    elif schedule == "linear":
+        value = start + (end - start) * min(1.0, max(0.0, progress))
+    else:
+        value = max(end, start * float(parameters["behavior.boltzmann.decay"]) ** step)
+    return max(1e-8, value)
+
+
+class BehaviorPolicy:
+    def __init__(self, agent, action_space, parameters, seed: int) -> None:
+        self.agent = agent
+        self.parameters = parameters
+        self.rng = np.random.default_rng(seed + 130363)
+
+    def reset_episode(self, episode: int = 0, progress: float = 0.0) -> None:
+        return None
+
+    def select_action(self, observation, step: int = 0, progress: float = 0.0) -> int:
+        values = np.asarray(self.agent.action_scores(observation), dtype=np.float64)
+        logits = values / _temperature(self.parameters, step, progress)
+        logits -= np.max(logits)
+        weights = np.exp(logits)
+        probabilities = weights / np.sum(weights)
+        return int(self.rng.choice(values.size, p=probabilities))

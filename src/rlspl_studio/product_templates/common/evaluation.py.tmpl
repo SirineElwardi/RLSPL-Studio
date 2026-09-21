@@ -1,0 +1,159 @@
+"""Evaluation and visualization pipeline."""
+
+from __future__ import annotations
+
+import math
+import statistics
+from pathlib import Path
+from typing import Any
+
+from .behavior import BehaviorPolicy
+from .environment import make_environment, reached_goal
+from .trainer import TrainingResult
+
+
+def evaluate(agent, config: dict[str, Any]) -> list[dict[str, Any]]:
+    evaluation = config["evaluation"]
+    parameters = {
+        parameter_id: binding["value"]
+        for parameter_id, binding in config["effective_parameters"].items()
+        if binding["mode"] == "fixed"
+    }
+    rows: list[dict[str, Any]] = []
+    for seed in evaluation["seeds"]:
+        environment = make_environment()
+        environment.action_space.seed(int(seed))
+        behavior = BehaviorPolicy(agent, environment.action_space, parameters, int(seed))
+        try:
+            for episode in range(int(evaluation["episodes_per_seed"])):
+                observation, _ = environment.reset(seed=int(seed) + episode)
+                behavior.reset_episode(episode, 1.0)
+                reward_sum = 0.0
+                step_count = 0
+                success = False
+                while True:
+                    mode = evaluation.get("action_mode", "deterministic")
+                    if mode == "training_behavior":
+                        action = behavior.select_action(observation, episode, 1.0)
+                    elif mode == "stochastic":
+                        chooser = getattr(agent, "stochastic_action", None)
+                        action = chooser(observation) if chooser else agent.select_action(
+                            observation, epsilon=1.0
+                        )
+                    else:
+                        chooser = getattr(agent, "deterministic_action", None)
+                        action = chooser(observation) if chooser else agent.select_action(
+                            observation, epsilon=0.0
+                        )
+                    observation, reward, terminated, truncated, _ = environment.step(action)
+                    reward_sum += float(reward)
+                    step_count += 1
+                    if terminated or truncated:
+                        success = reached_goal(
+                            environment, observation, bool(terminated), reward_sum
+                        )
+                        break
+                rows.append({
+                    "seed": int(seed),
+                    "episode": episode,
+                    "reward": reward_sum,
+                    "steps": step_count,
+                    "success": success,
+                })
+        finally:
+            environment.close()
+    return rows
+
+
+def summarize(
+    rows: list[dict[str, Any]],
+    training: TrainingResult,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    rewards = [float(row["reward"]) for row in rows]
+    metrics: dict[str, Any] = {}
+    requested = set(config["evaluation"]["metrics"])
+    if "average_reward" in requested:
+        metrics["average_reward"] = statistics.fmean(rewards)
+    if "cumulative_reward" in requested:
+        metrics["cumulative_reward"] = sum(rewards)
+    if "success_rate" in requested:
+        metrics["success_rate"] = sum(bool(row["success"]) for row in rows) / len(rows)
+    if "reward_auc" in requested:
+        metrics["reward_auc"] = sum(
+            (left + right) / 2.0
+            for left, right in zip(training.rewards, training.rewards[1:])
+        )
+    if "training_time" in requested:
+        metrics["training_time"] = training.duration_seconds
+    if "environment_steps" in requested:
+        metrics["environment_steps"] = sum(training.steps)
+    if "episodes_to_threshold" in requested:
+        metrics["episodes_to_threshold"] = next(
+            (index + 1 for index, success in enumerate(training.successes) if success), None
+        )
+
+    summaries: dict[str, Any] = {}
+    selected = set(config["evaluation"]["summaries"])
+    if "mean" in selected:
+        summaries["mean"] = statistics.fmean(rewards)
+    if "median" in selected:
+        summaries["median"] = statistics.median(rewards)
+    if "standard_deviation" in selected:
+        summaries["standard_deviation"] = statistics.stdev(rewards)
+    if "confidence_interval" in selected:
+        mean = statistics.fmean(rewards)
+        margin = 1.96 * statistics.stdev(rewards) / math.sqrt(len(rewards))
+        summaries["confidence_interval_95"] = [mean - margin, mean + margin]
+    if "iqm" in selected:
+        ordered = sorted(rewards)
+        lower = len(ordered) // 4
+        upper = len(ordered) - lower
+        summaries["iqm"] = statistics.fmean(ordered[lower:upper])
+    return {"metrics": metrics, "reward_summaries": summaries}
+
+
+def write_plots(
+    output: Path,
+    rows: list[dict[str, Any]],
+    training: TrainingResult,
+    config: dict[str, Any],
+) -> list[Path]:
+    requested = set(config["evaluation"]["visualizations"])
+    if not requested:
+        return []
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    paths: list[Path] = []
+    if "learning_curve" in requested or "convergence" in requested:
+        figure, axis = plt.subplots(figsize=(8, 4.5))
+        axis.plot(range(1, len(training.rewards) + 1), training.rewards, alpha=0.45)
+        window = min(25, len(training.rewards))
+        if window > 1:
+            rolling = [
+                statistics.fmean(training.rewards[max(0, index - window + 1):index + 1])
+                for index in range(len(training.rewards))
+            ]
+            axis.plot(range(1, len(rolling) + 1), rolling, linewidth=2, label=f"{window}-episode mean")
+            axis.legend()
+        axis.set(xlabel="Training episode", ylabel="Reward", title="Training reward curve")
+        axis.grid(alpha=0.2)
+        path = output / "learning-curve.png"
+        figure.tight_layout()
+        figure.savefig(path, dpi=160)
+        plt.close(figure)
+        paths.append(path)
+    if "reward_distribution" in requested:
+        figure, axis = plt.subplots(figsize=(7, 4.5))
+        axis.hist([row["reward"] for row in rows], bins="auto")
+        axis.set(xlabel="Evaluation reward", ylabel="Count", title="Evaluation reward distribution")
+        axis.grid(axis="y", alpha=0.2)
+        path = output / "reward-distribution.png"
+        figure.tight_layout()
+        figure.savefig(path, dpi=160)
+        plt.close(figure)
+        paths.append(path)
+    return paths

@@ -1,0 +1,40 @@
+"""Scheduled Ornstein-Uhlenbeck action-noise process."""
+
+from __future__ import annotations
+
+import numpy as np
+
+
+def _sigma(parameters, step: int, progress: float) -> float:
+    start = float(parameters["behavior.ou.sigma_start"])
+    end = float(parameters["behavior.ou.sigma_end"])
+    schedule = parameters["behavior.ou.schedule"]
+    if schedule == "constant":
+        return start
+    if schedule == "linear":
+        return start + (end - start) * min(1.0, max(0.0, progress))
+    return max(end, start * float(parameters["behavior.ou.decay"]) ** step)
+
+
+class BehaviorPolicy:
+    def __init__(self, agent, action_space, parameters, seed: int) -> None:
+        self.agent = agent
+        self.parameters = parameters
+        self.low = np.asarray(action_space.low, dtype=np.float32)
+        self.high = np.asarray(action_space.high, dtype=np.float32)
+        self.scale = (self.high - self.low) / 2.0
+        self.rng = np.random.default_rng(seed + 196613)
+        self.state = np.zeros_like(self.low, dtype=np.float32)
+
+    def reset_episode(self, episode: int = 0, progress: float = 0.0) -> None:
+        self.state.fill(0.0)
+
+    def select_action(self, observation, step: int = 0, progress: float = 0.0):
+        theta = float(self.parameters["behavior.ou.theta"])
+        mu = float(self.parameters["behavior.ou.mu"])
+        self.state += (
+            theta * (mu - self.state)
+            + _sigma(self.parameters, step, progress) * self.rng.standard_normal(self.state.shape)
+        ).astype(np.float32)
+        base = np.asarray(self.agent.behavior_action(observation), dtype=np.float32)
+        return np.clip(base + self.state * self.scale, self.low, self.high).astype(np.float32)
